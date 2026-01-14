@@ -31,6 +31,7 @@ class Live2DMessageEvent(AstrMessageEvent):
         websocket_server: Any,
         client_id: str,
         config: dict,
+        resource_manager: Any | None = None,
     ):
         """
         初始化 Live2D 消息事件
@@ -48,12 +49,14 @@ class Live2DMessageEvent(AstrMessageEvent):
         self.websocket_server = websocket_server
         self.client_id = client_id
         self.config = config
+        self.resource_manager = resource_manager
 
         # 初始化消息转换器
         self.output_converter = OutputMessageConverter(
             enable_auto_emotion=config.get("enable_auto_emotion", True),
             enable_tts=config.get("enable_tts", True),
             tts_mode=config.get("tts_mode", "remote"),
+            resource_manager=self.resource_manager,
         )
 
     async def send(self, message: MessageChain | None) -> None:

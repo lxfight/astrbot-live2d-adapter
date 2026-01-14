@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 class MessageHandler:
     """消息处理器"""
 
-    def __init__(self, config):
+    def __init__(self, config, resource_manager=None):
         self.config = config
+        self.resource_manager = resource_manager
         # 消息接收回调函数（由平台适配器注入）
         self.on_message_received: Callable | None = None
 
@@ -46,6 +47,18 @@ class MessageHandler:
         elif packet.op == Protocol.OP_INPUT_SHORTCUT:
             return await self.handle_shortcut_input(packet, client_id)
 
+        elif packet.op == Protocol.OP_RESOURCE_PREPARE:
+            return await self.handle_resource_prepare(packet)
+
+        elif packet.op == Protocol.OP_RESOURCE_COMMIT:
+            return await self.handle_resource_commit(packet)
+
+        elif packet.op == Protocol.OP_RESOURCE_GET:
+            return await self.handle_resource_get(packet)
+
+        elif packet.op == Protocol.OP_RESOURCE_RELEASE:
+            return await self.handle_resource_release(packet)
+
         else:
             logger.warning(f"未知的操作码: {packet.op}")
             return None
@@ -55,7 +68,7 @@ class MessageHandler:
         payload = packet.payload or {}
 
         # 验证版本
-        client_version = payload.get("version", "")
+        client_version = payload.get("version") or payload.get("protocol_version", "")
         if not client_version.startswith("1."):
             logger.error(f"版本不匹配: {client_version}")
             return Protocol.create_error_packet(
@@ -80,8 +93,20 @@ class MessageHandler:
         logger.info(
             f"客户端 {client_id} 握手成功，分配 session_id: {session_id}, user_id: {user_id}"
         )
+        capabilities = payload.get("capabilities") or []
+        if capabilities:
+            logger.info(f"客户端声明能力: {capabilities}")
         return Protocol.create_handshake_ack(
-            request_id=packet.id, session_id=session_id, user_id=user_id
+            request_id=packet.id,
+            session_id=session_id,
+            user_id=user_id,
+            config={
+                "maxMessageLength": 5000,
+                "supportedImageFormats": ["jpg", "png", "gif", "webp"],
+                "supportedAudioFormats": ["mp3", "wav", "ogg"],
+                "maxInlineBytes": getattr(self.config, "resource_max_inline_bytes", 262144),
+                "resourceBaseUrl": getattr(self.config, "resource_base_url", ""),
+            },
         )
 
     async def handle_ping(self, packet: BasePacket) -> BasePacket:
@@ -93,7 +118,7 @@ class MessageHandler:
     ) -> BasePacket | None:
         """处理触摸输入"""
         payload = packet.payload or {}
-        part = payload.get("part", "Unknown")
+        part = payload.get("part") or payload.get("area") or "Unknown"
         action = payload.get("action", "tap")
 
         logger.info(f"客户端 {client_id} 触摸了 {part} ({action})")
@@ -176,3 +201,87 @@ class MessageHandler:
             )
 
         return None
+
+    async def handle_resource_prepare(self, packet: BasePacket) -> BasePacket:
+        """处理资源上传申请"""
+        if not self.resource_manager:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_UNSUPPORTED_TYPE, "资源服务未启用", packet.id
+            )
+        payload = packet.payload or {}
+        kind = payload.get("kind", "file")
+        mime = payload.get("mime", "application/octet-stream")
+        size = int(payload.get("size", 0) or 0)
+        sha256 = payload.get("sha256")
+        entry = self.resource_manager.prepare_upload(kind, mime, size=size, sha256=sha256)
+        headers = {}
+        if getattr(self.resource_manager, "token", None):
+            headers["Authorization"] = f"Bearer {self.resource_manager.token}"
+        return Protocol.create_packet(
+            Protocol.OP_RESOURCE_PREPARE,
+            payload={
+                "rid": entry.rid,
+                "upload": {
+                    "method": "PUT",
+                    "url": self.resource_manager.build_upload_url(entry.rid),
+                    "headers": headers or None,
+                },
+                "resource": self.resource_manager.get_resource_payload(entry.rid),
+            },
+            packet_id=packet.id,
+        )
+
+    async def handle_resource_commit(self, packet: BasePacket) -> BasePacket:
+        """处理资源上传确认"""
+        if not self.resource_manager:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_UNSUPPORTED_TYPE, "资源服务未启用", packet.id
+            )
+        payload = packet.payload or {}
+        rid = payload.get("rid")
+        size = payload.get("size")
+        entry = self.resource_manager.commit_upload(rid, size=size)
+        if not entry:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_RESOURCE_NOT_FOUND, "资源不存在", packet.id
+            )
+        return Protocol.create_packet(
+            Protocol.OP_RESOURCE_COMMIT,
+            payload={"rid": entry.rid, "status": entry.status},
+            packet_id=packet.id,
+        )
+
+    async def handle_resource_get(self, packet: BasePacket) -> BasePacket:
+        """处理资源获取请求"""
+        if not self.resource_manager:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_UNSUPPORTED_TYPE, "资源服务未启用", packet.id
+            )
+        payload = packet.payload or {}
+        rid = payload.get("rid")
+        resource_payload = self.resource_manager.get_resource_payload(rid)
+        if not resource_payload:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_RESOURCE_NOT_FOUND, "资源不存在", packet.id
+            )
+        return Protocol.create_packet(
+            Protocol.OP_RESOURCE_GET, payload=resource_payload, packet_id=packet.id
+        )
+
+    async def handle_resource_release(self, packet: BasePacket) -> BasePacket:
+        """处理资源释放请求"""
+        if not self.resource_manager:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_UNSUPPORTED_TYPE, "资源服务未启用", packet.id
+            )
+        payload = packet.payload or {}
+        rid = payload.get("rid")
+        if not self.resource_manager.release(rid):
+            return Protocol.create_error_packet(
+                Protocol.ERROR_RESOURCE_NOT_FOUND, "资源不存在", packet.id
+            )
+        return Protocol.create_packet(
+            Protocol.OP_RESOURCE_RELEASE,
+            payload={"rid": rid, "released": True},
+            packet_id=packet.id,
+        )

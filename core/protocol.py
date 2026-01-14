@@ -83,6 +83,11 @@ class Protocol:
     OP_STATE_READY = "state.ready"
     OP_STATE_PLAYING = "state.playing"
     OP_STATE_CONFIG = "state.config"
+    OP_RESOURCE_PREPARE = "resource.prepare"
+    OP_RESOURCE_COMMIT = "resource.commit"
+    OP_RESOURCE_GET = "resource.get"
+    OP_RESOURCE_RELEASE = "resource.release"
+    OP_RESOURCE_PROGRESS = "resource.progress"
 
     # 错误码 - 系统错误
     ERROR_AUTH_FAILED = 4001
@@ -90,6 +95,7 @@ class Protocol:
     ERROR_INVALID_PAYLOAD = 4003
     ERROR_CONNECTION_FULL = 4004
     ERROR_SESSION_NOT_EXIST = 4005
+    ERROR_RESOURCE_NOT_FOUND = 4006
 
     # 错误码 - 业务错误
     ERROR_TTS_FAILED = 5001
@@ -97,6 +103,7 @@ class Protocol:
     ERROR_PERFORM_FAILED = 5003
     ERROR_UNSUPPORTED_TYPE = 5004
     ERROR_FILE_UPLOAD_FAILED = 5005
+    ERROR_RESOURCE_IO = 5006
 
     @staticmethod
     def create_packet(
@@ -128,11 +135,23 @@ class Protocol:
         session_id: str,
         user_id: str,
         features: list[str] = None,
+        capabilities: list[str] | None = None,
         config: dict[str, Any] = None,
     ) -> BasePacket:
         """创建握手确认包"""
         if features is None:
             features = ["message_chain", "tts_url", "multi_modal", "voice_input"]
+        if capabilities is None:
+            capabilities = [
+                "input.message",
+                "input.touch",
+                "input.shortcut",
+                "perform.show",
+                "perform.interrupt",
+                "resource.prepare",
+                "resource.get",
+                "resource.release",
+            ]
         if config is None:
             config = {
                 "maxMessageLength": 5000,
@@ -150,6 +169,7 @@ class Protocol:
                 "version": "1.0.0",
                 "serverTime": BasePacket.current_timestamp(),
                 "features": features,
+                "capabilities": capabilities,
                 "config": config,
                 "session": {"sessionId": session_id, "userId": user_id},
             },
@@ -198,6 +218,8 @@ def create_text_element(
 def create_tts_element(
     text: str,
     url: str | None = None,
+    rid: str | None = None,
+    inline: str | None = None,
     tts_mode: str = "remote",
     voice: str | None = None,
     volume: float = 1.0,
@@ -208,6 +230,12 @@ def create_tts_element(
     if url:
         element["url"] = url
         element["ttsMode"] = "remote"
+    if rid:
+        element["rid"] = rid
+        element["ttsMode"] = "remote"
+    if inline:
+        element["inline"] = inline
+        element["ttsMode"] = "remote"
     elif tts_mode == "local" and voice:
         element["ttsMode"] = "local"
         element["voice"] = voice
@@ -215,13 +243,21 @@ def create_tts_element(
 
 
 def create_image_element(
-    url: str,
+    url: str | None = None,
     duration: int = 5000,
     position: str = "center",
     size: dict[str, int] | None = None,
+    rid: str | None = None,
+    inline: str | None = None,
 ) -> dict[str, Any]:
     """创建图片展示元素"""
-    element = {"type": "image", "url": url, "duration": duration, "position": position}
+    element = {"type": "image", "duration": duration, "position": position}
+    if url:
+        element["url"] = url
+    if rid:
+        element["rid"] = rid
+    if inline:
+        element["inline"] = inline
     if size:
         element["size"] = size
     return element

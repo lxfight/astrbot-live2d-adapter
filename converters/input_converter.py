@@ -16,15 +16,17 @@ except ImportError:
 class InputMessageConverter:
     """输入消息转换器 - 将 Live2D 客户端的消息转换为 AstrBot 消息对象"""
 
-    def __init__(self, temp_dir: str | None = None):
+    def __init__(self, temp_dir: str | None = None, resource_manager: Any | None = None):
         """
         初始化转换器
 
         Args:
             temp_dir: 临时文件目录，用于存储 Base64 图片
+            resource_manager: 资源管理器（处理 rid 引用）
         """
         self.temp_dir = temp_dir or tempfile.gettempdir()
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
+        self.resource_manager = resource_manager
 
     def convert(self, content: list[dict[str, Any]]) -> tuple[list, str]:
         """
@@ -71,6 +73,19 @@ class InputMessageConverter:
 
         url = item.get("url")
         data = item.get("data")
+        inline = item.get("inline")
+        rid = item.get("rid")
+
+        if inline and not data:
+            data = inline
+
+        if rid and self.resource_manager:
+            resource_path = self.resource_manager.get_resource_path(rid)
+            if resource_path and resource_path.exists():
+                return Image.fromFileSystem(str(resource_path))
+            resource_payload = self.resource_manager.get_resource_payload(rid)
+            if resource_payload and resource_payload.get("url"):
+                return Image.fromURL(resource_payload["url"])
 
         if data and data.startswith("data:image/"):
             # Base64 图片
@@ -115,53 +130,67 @@ class InputMessageConverter:
                 return Plain(text), text
             return None, text
 
-        else:
-            # 远程 STT，返回音频文件路径（由 AstrBot STT 插件处理）
-            url = item.get("url")
-            data = item.get("data")
+        # 远程 STT，返回音频文件路径（由 AstrBot STT 插件处理）
+        url = item.get("url")
+        data = item.get("data")
+        inline = item.get("inline")
+        rid = item.get("rid")
 
-            # 优先处理 Base64 音频数据
-            if data and Record:
-                try:
-                    # 解析 data URI (格式: data:audio/webm;base64,... 或 data:audio/webm;codecs=opus;base64,...)
-                    match = re.match(r"data:audio/([^;,]+)(?:[^,]*)?;base64,(.+)", data)
-                    if match:
-                        # 提取主要格式（去除 codecs 等参数）
-                        audio_format_raw = match.group(1)
-                        base64_data = match.group(2)
+        if inline and not data:
+            data = inline
 
-                        # 映射格式到文件扩展名
-                        format_map = {
-                            "webm": "webm",
-                            "ogg": "ogg",
-                            "opus": "opus",
-                            "mp4": "m4a",
-                            "mpeg": "mp3",
-                            "wav": "wav",
-                        }
-                        audio_ext = format_map.get(audio_format_raw.lower(), audio_format_raw.lower())
+        if rid and self.resource_manager and Record:
+            resource_path = self.resource_manager.get_resource_path(rid)
+            if resource_path and resource_path.exists():
+                return Record.fromFileSystem(str(resource_path)), "[语音]"
+            resource_payload = self.resource_manager.get_resource_payload(rid)
+            if resource_payload and resource_payload.get("url"):
+                return Record.fromURL(resource_payload["url"]), "[语音]"
 
-                        audio_bytes = base64.b64decode(base64_data)
+        # 优先处理 Base64 音频数据
+        if data and Record:
+            try:
+                # 解析 data URI (格式: data:audio/webm;base64,... 或 data:audio/webm;codecs=opus;base64,...)
+                match = re.match(r"data:audio/([^;,]+)(?:[^,]*)?;base64,(.+)", data)
+                if match:
+                    # 提取主要格式（去除 codecs 等参数）
+                    audio_format_raw = match.group(1)
+                    base64_data = match.group(2)
 
-                        # 保存到临时文件
-                        temp_file = os.path.join(
-                            self.temp_dir,
-                            f"live2d_voice_{os.urandom(8).hex()}.{audio_ext}",
-                        )
-                        with open(temp_file, "wb") as f:
-                            f.write(audio_bytes)
+                    # 映射格式到文件扩展名
+                    format_map = {
+                        "webm": "webm",
+                        "ogg": "ogg",
+                        "opus": "opus",
+                        "mp4": "m4a",
+                        "mpeg": "mp3",
+                        "wav": "wav",
+                    }
+                    audio_ext = format_map.get(
+                        audio_format_raw.lower(), audio_format_raw.lower()
+                    )
 
-                        print(f"[信息] 已保存语音文件: {temp_file}, 格式: {audio_format_raw}")
-                        return Record.fromFileSystem(temp_file), "[语音]"
-                except Exception as e:
-                    print(f"[错误] 解析 Base64 音频失败: {e}")
+                    audio_bytes = base64.b64decode(base64_data)
 
-            # 降级处理 URL
-            if url and Record:
-                if url.startswith("file:///"):
-                    local_path = url[8:] if os.name == "nt" else url[7:]
-                    return Record.fromFileSystem(local_path), "[语音]"
-                elif url.startswith("http://") or url.startswith("https://"):
-                    return Record.fromURL(url), "[语音]"
+                    # 保存到临时文件
+                    temp_file = os.path.join(
+                        self.temp_dir,
+                        f"live2d_voice_{os.urandom(8).hex()}.{audio_ext}",
+                    )
+                    with open(temp_file, "wb") as f:
+                        f.write(audio_bytes)
 
-            return None, None
+                    print(f"[信息] 已保存语音文件: {temp_file}, 格式: {audio_format_raw}")
+                    return Record.fromFileSystem(temp_file), "[语音]"
+            except Exception as e:
+                print(f"[错误] 解析 Base64 音频失败: {e}")
+
+        # 降级处理 URL
+        if url and Record:
+            if url.startswith("file:///"):
+                local_path = url[8:] if os.name == "nt" else url[7:]
+                return Record.fromFileSystem(local_path), "[语音]"
+            if url.startswith("http://") or url.startswith("https://"):
+                return Record.fromURL(url), "[语音]"
+
+        return None, None

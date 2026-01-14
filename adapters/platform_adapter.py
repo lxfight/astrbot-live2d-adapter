@@ -26,6 +26,8 @@ from ..converters.input_converter import InputMessageConverter
 from ..converters.output_converter import OutputMessageConverter
 from ..core.config import Config
 from ..core.protocol import BasePacket, Protocol
+from ..server.resource_manager import ResourceManager
+from ..server.resource_server import ResourceServer
 from ..server.websocket_server import WebSocketServer
 
 from .message_event import Live2DMessageEvent
@@ -49,6 +51,14 @@ logger = logging.getLogger(__name__)
         "enable_auto_emotion": True,
         "enable_tts": False,
         "tts_mode": "local",
+        "resource_enabled": True,
+        "resource_host": "0.0.0.0",
+        "resource_port": 9091,
+        "resource_path": "/resources",
+        "resource_dir": "./data/live2d_resources",
+        "resource_base_url": "",
+        "resource_token": "",
+        "resource_max_inline_bytes": 262144,
     },
     adapter_display_name="Live2D",
     support_streaming_message=True,
@@ -76,13 +86,28 @@ class Live2DPlatformAdapter(Platform):
 
         # WebSocket 服务器实例
         self.ws_server: WebSocketServer | None = None
+        self.resource_server: ResourceServer | None = None
+
+        self.resource_manager = ResourceManager(
+            storage_dir=self.config_obj.resource_dir,
+            base_url=self.config_obj.resource_base_url,
+            resource_path=self.config_obj.resource_path,
+            max_inline_bytes=self.config_obj.resource_max_inline_bytes,
+            token=self.config_obj.resource_token,
+        )
 
         # 消息转换器
-        self.input_converter = InputMessageConverter()
+        self.input_converter = InputMessageConverter(resource_manager=self.resource_manager)
         self.output_converter = OutputMessageConverter(
             enable_auto_emotion=platform_config.get("enable_auto_emotion", True),
             enable_tts=platform_config.get("enable_tts", False),
             tts_mode=platform_config.get("tts_mode", "local"),
+            resource_manager=self.resource_manager,
+            resource_config={
+                "max_inline_bytes": self.config_obj.resource_max_inline_bytes,
+                "base_url": self.config_obj.resource_base_url,
+                "resource_path": self.config_obj.resource_path,
+            },
         )
 
         # 当前连接的客户端ID（单一连接约束）
@@ -128,6 +153,44 @@ class Live2DPlatformAdapter(Platform):
             @property
             def kick_old(self) -> bool:
                 return self._data.get("kick_old", True)
+
+            @property
+            def resource_enabled(self) -> bool:
+                return self._data.get("resource_enabled", True)
+
+            @property
+            def resource_host(self) -> str:
+                return self._data.get("resource_host", self.server_host)
+
+            @property
+            def resource_port(self) -> int:
+                return self._data.get("resource_port", 9091)
+
+            @property
+            def resource_path(self) -> str:
+                return self._data.get("resource_path", "/resources")
+
+            @property
+            def resource_dir(self) -> str:
+                return self._data.get("resource_dir", "./data/live2d_resources")
+
+            @property
+            def resource_base_url(self) -> str:
+                base_url = self._data.get("resource_base_url", "")
+                if base_url:
+                    return base_url
+                return f"http://{self.resource_host}:{self.resource_port}"
+
+            @property
+            def resource_token(self) -> str:
+                token = self._data.get("resource_token", "")
+                if token:
+                    return token
+                return self.auth_token
+
+            @property
+            def resource_max_inline_bytes(self) -> int:
+                return int(self._data.get("resource_max_inline_bytes", 262144))
 
         return ConfigAdapter(config_dict)
 
@@ -221,6 +284,7 @@ class Live2DPlatformAdapter(Platform):
                         "enable_streaming", True
                     ),
                 },
+                resource_manager=self.resource_manager,
             )
 
             # 提交事件到 AstrBot 事件队列
@@ -272,13 +336,26 @@ class Live2DPlatformAdapter(Platform):
             logger.info("[Live2D] 正在启动平台适配器...")
 
             # 创建 WebSocket 服务器
-            self.ws_server = WebSocketServer(self.config_obj)
+            self.ws_server = WebSocketServer(
+                self.config_obj, resource_manager=self.resource_manager
+            )
 
             # 修改 handler 以接入 AstrBot 事件流程
             await self._setup_message_handler()
 
             # 启动 WebSocket 服务器
             await self.ws_server.start()
+
+            # 启动资源服务器
+            if self.config_obj.resource_enabled:
+                self.resource_server = ResourceServer(
+                    manager=self.resource_manager,
+                    host=self.config_obj.resource_host,
+                    port=self.config_obj.resource_port,
+                    resource_path=self.config_obj.resource_path,
+                    token=self.config_obj.resource_token,
+                )
+                await self.resource_server.start()
 
             logger.info("[Live2D] 平台适配器启动成功")
             logger.info(
@@ -320,6 +397,9 @@ class Live2DPlatformAdapter(Platform):
 
             if self.ws_server:
                 await self.ws_server.stop()
+
+            if self.resource_server:
+                await self.resource_server.stop()
 
             logger.info("[Live2D] 平台适配器已停止")
 

@@ -84,3 +84,41 @@ class Config:
     @property
     def http_static_dir(self) -> str:
         return self.get("http.static_dir", "../astrbot-live2d-desktop/dist")
+
+    @property
+    def resource_enabled(self) -> bool:
+        return self.get("resource.enabled", True)
+
+    @property
+    def resource_host(self) -> str:
+        return self.get("resource.host", self.server_host)
+
+    @property
+    def resource_port(self) -> int:
+        return self.get("resource.port", 9091)
+
+    @property
+    def resource_path(self) -> str:
+        return self.get("resource.path", "/resources")
+
+    @property
+    def resource_dir(self) -> str:
+        return self.get("resource.dir", "./data/live2d_resources")
+
+    @property
+    def resource_base_url(self) -> str:
+        base_url = self.get("resource.base_url", "")
+        if base_url:
+            return base_url
+        return f"http://{self.resource_host}:{self.resource_port}"
+
+    @property
+    def resource_token(self) -> str:
+        token = self.get("resource.token", "")
+        if token:
+            return token
+        return self.auth_token
+
+    @property
+    def resource_max_inline_bytes(self) -> int:
+        return int(self.get("resource.max_inline_bytes", 262144))

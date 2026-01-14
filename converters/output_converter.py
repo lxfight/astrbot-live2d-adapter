@@ -28,6 +28,8 @@ class OutputMessageConverter:
         enable_auto_emotion: bool = True,
         enable_tts: bool = True,
         tts_mode: str = "remote",
+        resource_manager: Any | None = None,
+        resource_config: dict[str, Any] | None = None,
     ):
         """
         初始化转换器
@@ -36,10 +38,14 @@ class OutputMessageConverter:
             enable_auto_emotion: 是否启用自动情感识别（动作/表情）
             enable_tts: 是否启用 TTS
             tts_mode: TTS 模式 (remote/local)
+            resource_manager: 资源管理器（处理本地文件转资源）
+            resource_config: 资源配置（inline 限制等）
         """
         self.enable_auto_emotion = enable_auto_emotion
         self.enable_tts = enable_tts
         self.tts_mode = tts_mode
+        self.resource_manager = resource_manager
+        self.resource_config = resource_config or {}
 
     def convert(
         self, message_chain: MessageChain, tts_url: str | None = None
@@ -77,9 +83,9 @@ class OutputMessageConverter:
 
                 # 如果启用了 TTS 且提供了 TTS URL
                 if self.enable_tts and tts_url:
-                    sequence.append(
-                        create_tts_element(text=text, url=tts_url, tts_mode="remote")
-                    )
+                    tts_element = self._build_tts_element(text=text, url=tts_url)
+                    if tts_element:
+                        sequence.append(tts_element)
                 elif self.enable_tts and self.tts_mode == "local":
                     sequence.append(
                         create_tts_element(
@@ -89,25 +95,15 @@ class OutputMessageConverter:
 
             elif isinstance(component, Image):
                 # 添加图片展示
-                image_url = self._get_image_url(component)
-                if image_url:
-                    sequence.append(
-                        create_image_element(
-                            url=image_url, duration=5000, position="center"
-                        )
-                    )
+                image_element = self._build_image_element(component)
+                if image_element:
+                    sequence.append(image_element)
 
             elif isinstance(component, Record):
                 # 音频直接作为 TTS 播放
-                audio_url = self._get_audio_url(component)
-                if audio_url:
-                    sequence.append(
-                        create_tts_element(
-                            text="",  # 无文本
-                            url=audio_url,
-                            tts_mode="remote",
-                        )
-                    )
+                audio_element = self._build_audio_element(component)
+                if audio_element:
+                    sequence.append(audio_element)
 
         # 自动添加情感动作和表情（只添加一次）
         if self.enable_auto_emotion and full_text and not has_added_emotion:
@@ -141,11 +137,11 @@ class OutputMessageConverter:
             file_path = image.file
             if file_path.startswith("http://") or file_path.startswith("https://"):
                 return file_path
+            if file_path.startswith("file://"):
+                local_path = file_path.replace("file:///", "", 1)
+                return local_path
             elif os.path.isfile(file_path):
-                # 本地文件路径转为 file:// URL
-                return (
-                    f"file:///{file_path}" if os.name == "nt" else f"file://{file_path}"
-                )
+                return file_path
         return None
 
     def _get_audio_url(self, record: Any) -> str | None:
@@ -154,11 +150,64 @@ class OutputMessageConverter:
             file_path = record.file
             if file_path.startswith("http://") or file_path.startswith("https://"):
                 return file_path
+            if file_path.startswith("file://"):
+                local_path = file_path.replace("file:///", "", 1)
+                return local_path
             elif os.path.isfile(file_path):
-                return (
-                    f"file:///{file_path}" if os.name == "nt" else f"file://{file_path}"
-                )
+                return file_path
         return None
+
+    def _build_resource_element(self, file_path: str, kind: str) -> dict[str, Any] | None:
+        if not file_path:
+            return None
+        if file_path.startswith("http://") or file_path.startswith("https://"):
+            return {"url": file_path}
+        if not os.path.isfile(file_path):
+            return None
+        if not self.resource_manager:
+            file_url = (
+                f"file:///{file_path}" if os.name == "nt" else f"file://{file_path}"
+            )
+            return {"url": file_url}
+        return self.resource_manager.build_reference_from_file(file_path, kind)
+
+    def _build_image_element(self, image: Any) -> dict[str, Any] | None:
+        image_path = self._get_image_url(image)
+        resource_ref = self._build_resource_element(image_path, "image") if image_path else None
+        if not resource_ref:
+            return None
+        return create_image_element(
+            url=resource_ref.get("url"),
+            rid=resource_ref.get("rid"),
+            inline=resource_ref.get("inline"),
+            duration=5000,
+            position="center",
+        )
+
+    def _build_audio_element(self, record: Any) -> dict[str, Any] | None:
+        audio_path = self._get_audio_url(record)
+        resource_ref = self._build_resource_element(audio_path, "audio") if audio_path else None
+        if not resource_ref:
+            return None
+        return create_tts_element(
+            text="",
+            url=resource_ref.get("url"),
+            rid=resource_ref.get("rid"),
+            inline=resource_ref.get("inline"),
+            tts_mode="remote",
+        )
+
+    def _build_tts_element(self, text: str, url: str) -> dict[str, Any] | None:
+        resource_ref = self._build_resource_element(url, "audio")
+        if not resource_ref:
+            return None
+        return create_tts_element(
+            text=text,
+            url=resource_ref.get("url"),
+            rid=resource_ref.get("rid"),
+            inline=resource_ref.get("inline"),
+            tts_mode="remote",
+        )
 
     def convert_streaming(self, text_chunk: str) -> list[dict[str, Any]]:
         """

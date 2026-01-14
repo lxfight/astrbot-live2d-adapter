@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 class WebSocketServer:
     """WebSocket 服务器"""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, resource_manager=None):
         self.config = config
-        self.handler = MessageHandler(config)
+        self.handler = MessageHandler(config, resource_manager=resource_manager)
         self.clients: dict[str, WebSocketServerProtocol] = {}
         self.server = None
 
@@ -114,7 +114,13 @@ class WebSocketServer:
                 return
 
             # 获取客户端ID
-            client_id = packet.payload.get("clientId", BasePacket.generate_id())
+            payload = packet.payload or {}
+            client_id = (
+                payload.get("clientId")
+                or payload.get("deviceId")
+                or payload.get("client")
+                or BasePacket.generate_id()
+            )
 
             # 处理握手
             response = await self.handler.handle_packet(packet, client_id)
@@ -127,6 +133,12 @@ class WebSocketServer:
             # 注册客户端
             if not await self.register(websocket, client_id):
                 return
+
+            # 发送 ready 事件
+            ready_packet = Protocol.create_packet(
+                Protocol.OP_STATE_READY, payload={"clientId": client_id}
+            )
+            await websocket.send(ready_packet.to_json())
 
             # 消息循环
             async for message in websocket:

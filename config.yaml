@@ -12,6 +12,16 @@ http:
   port: 8080
   static_dir: "../astrbot-live2d-desktop/dist"
 
+resource:
+  enabled: true
+  host: "0.0.0.0"
+  port: 9091
+  path: "/resources"
+  dir: "./data/live2d_resources"
+  base_url: ""  # 为空时自动使用 http://{host}:{port}
+  token: ""     # 为空时复用 auth_token
+  max_inline_bytes: 262144
+
 events:
   report_group_msg: true
   report_private_msg: true
