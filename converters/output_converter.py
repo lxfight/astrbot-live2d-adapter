@@ -1,13 +1,51 @@
 """输出消息转换器 - 将 AstrBot 的 MessageChain 转换为 Live2D 表演序列"""
 
+from __future__ import annotations
+
 import os
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from astrbot.api.event import MessageChain as MessageChainType
+else:
+    MessageChainType = Any
 
 try:
-    from astrbot.api.event import MessageChain
-    from astrbot.api.message_components import Image, Plain, Record
+    from astrbot.api.message_components import (
+        At,
+        AtAll,
+        Face,
+        File,
+        Forward,
+        Image,
+        Json,
+        Node,
+        Nodes,
+        Plain,
+        Poke,
+        Record,
+        Reply,
+        Video,
+        WechatEmoji,
+    )
 except ImportError:
-    Plain = Image = Record = MessageChain = None
+    (
+        At,
+        AtAll,
+        Face,
+        File,
+        Forward,
+        Image,
+        Json,
+        Node,
+        Nodes,
+        Plain,
+        Poke,
+        Record,
+        Reply,
+        Video,
+        WechatEmoji,
+    ) = (None,) * 15
 
 from ..core.protocol import (
     create_expression_element,
@@ -16,7 +54,6 @@ from ..core.protocol import (
     create_text_element,
     create_tts_element,
 )
-
 from .emotion_analyzer import EmotionAnalyzer
 
 
@@ -48,7 +85,7 @@ class OutputMessageConverter:
         self.resource_config = resource_config or {}
 
     def convert(
-        self, message_chain: MessageChain, tts_url: str | None = None
+        self, message_chain: MessageChainType, tts_url: str | None = None
     ) -> list[dict[str, Any]]:
         """
         转换 MessageChain 为表演序列
@@ -68,7 +105,7 @@ class OutputMessageConverter:
         has_added_emotion = False
 
         for component in message_chain.chain:
-            if isinstance(component, Plain):
+            if Plain and isinstance(component, Plain):
                 text = component.text
                 full_text += text
 
@@ -93,17 +130,28 @@ class OutputMessageConverter:
                         )
                     )
 
-            elif isinstance(component, Image):
+            elif Image and isinstance(component, Image):
                 # 添加图片展示
                 image_element = self._build_image_element(component)
                 if image_element:
                     sequence.append(image_element)
 
-            elif isinstance(component, Record):
+            elif Record and isinstance(component, Record):
                 # 音频直接作为 TTS 播放
                 audio_element = self._build_audio_element(component)
                 if audio_element:
                     sequence.append(audio_element)
+            else:
+                fallback_text = self._format_component_text(component)
+                if fallback_text:
+                    full_text += fallback_text
+                    sequence.append(
+                        create_text_element(
+                            content=fallback_text,
+                            duration=0,
+                            position="center",
+                        )
+                    )
 
         # 自动添加情感动作和表情（只添加一次）
         if self.enable_auto_emotion and full_text and not has_added_emotion:
@@ -208,6 +256,42 @@ class OutputMessageConverter:
             inline=resource_ref.get("inline"),
             tts_mode="remote",
         )
+
+    def _format_component_text(self, component: Any) -> str | None:
+        if AtAll and isinstance(component, AtAll):
+            return "@all"
+        if At and isinstance(component, At):
+            name = component.name or str(component.qq)
+            return f"@{name}"
+        if Reply and isinstance(component, Reply):
+            if component.message_str:
+                return f"[reply] {component.message_str}"
+            if component.text:
+                return f"[reply] {component.text}"
+            return "[reply]"
+        if Face and isinstance(component, Face):
+            face_id = getattr(component, "id", "")
+            return f"[face:{face_id}]" if face_id else "[face]"
+        if Poke and isinstance(component, Poke):
+            return "[poke]"
+        if File and isinstance(component, File):
+            name = getattr(component, "name", "") or "file"
+            return f"[file] {name}"
+        if Video and isinstance(component, Video):
+            return "[video]"
+        if Forward and isinstance(component, Forward):
+            return "[forward]"
+        if Node and isinstance(component, Node):
+            return "[forward]"
+        if Nodes and isinstance(component, Nodes):
+            return "[forward]"
+        if Json and isinstance(component, Json):
+            return "[json]"
+        if WechatEmoji and isinstance(component, WechatEmoji):
+            return "[emoji]"
+        if hasattr(component, "type"):
+            return f"[{component.type}]"
+        return None
 
     def convert_streaming(self, text_chunk: str) -> list[dict[str, Any]]:
         """

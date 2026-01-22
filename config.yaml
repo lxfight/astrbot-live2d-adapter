@@ -6,12 +6,6 @@ server:
   max_connections: 1
   kick_old: true
 
-http:
-  enabled: false  # 适配器作为服务端组件，默认不启用 HTTP 服务
-  host: "0.0.0.0"
-  port: 8080
-  static_dir: "../astrbot-live2d-desktop/dist"
-
 resource:
   enabled: true
   host: "0.0.0.0"

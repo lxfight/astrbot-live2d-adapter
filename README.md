@@ -76,12 +76,6 @@ server:
   kick_old: true           # 新连接时踢掉旧连接
   auth_token: ""           # 鉴权 Token（留空则不鉴权）
 
-http:
-  enabled: false           # 是否启用 HTTP 静态服务器
-  host: "0.0.0.0"
-  port: 8080
-  static_dir: "./static"
-
 # 功能开关
 enable_auto_emotion: true  # 自动情感识别和动作匹配
 enable_tts: false          # 是否启用 TTS（由 AstrBot TTS 插件提供）

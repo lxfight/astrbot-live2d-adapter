@@ -5,9 +5,8 @@ import logging
 from asyncio import Queue
 
 try:
-    from astrbot import logger
-    from astrbot.api.event import AstrMessageEvent, MessageChain
-    from astrbot.api.message_components import Image, Plain, Record
+    from astrbot.api.event import MessageChain
+    from astrbot.api.message_components import Plain
     from astrbot.api.platform import (
         AstrBotMessage,
         MessageMember,
@@ -24,12 +23,11 @@ except ImportError as e:
 
 from ..converters.input_converter import InputMessageConverter
 from ..converters.output_converter import OutputMessageConverter
-from ..core.config import Config
+from ..core.config import ConfigLike
 from ..core.protocol import BasePacket, Protocol
 from ..server.resource_manager import ResourceManager
 from ..server.resource_server import ResourceServer
 from ..server.websocket_server import WebSocketServer
-
 from .message_event import Live2DMessageEvent
 
 logger = logging.getLogger(__name__)
@@ -44,7 +42,7 @@ logger = logging.getLogger(__name__)
         "id": "live2d_default",
         "ws_host": "0.0.0.0",
         "ws_port": 9090,
-        "ws_path": "/ws",
+        "ws_path": "/astrbot/live2d",
         "auth_token": "your_secret_token",
         "max_connections": 1,
         "kick_old": True,
@@ -82,7 +80,7 @@ class Live2DPlatformAdapter(Platform):
         self.platform_config = platform_config
 
         # 初始化配置对象（用于兼容现有代码）
-        self.config_obj = self._create_config_from_dict(platform_config)
+        self.config_obj: ConfigLike = self._create_config_from_dict(platform_config)
 
         # WebSocket 服务器实例
         self.ws_server: WebSocketServer | None = None
@@ -115,7 +113,7 @@ class Live2DPlatformAdapter(Platform):
 
         logger.info(f"[Live2D] 平台适配器已初始化，ID: {self.config.get('id')}")
 
-    def _create_config_from_dict(self, config_dict: dict) -> Config:
+    def _create_config_from_dict(self, config_dict: dict) -> ConfigLike:
         """从字典创建 Config 对象（用于兼容现有 WebSocketServer）
 
         Args:
@@ -208,6 +206,44 @@ class Live2DPlatformAdapter(Platform):
             support_streaming_message=True,
         )
 
+    def _get_client_session(self, client_id: str) -> dict:
+        ws_server = self.ws_server
+        if not ws_server:
+            return {}
+        return ws_server.handler.client_states.get(client_id, {}).get(
+            "session", {}
+        )
+
+    def _resolve_message_type(self, metadata: dict) -> MessageType:
+        raw_type = metadata.get("messageType") or metadata.get("type")
+        if isinstance(raw_type, MessageType):
+            return raw_type
+        if isinstance(raw_type, str):
+            normalized = raw_type.strip().lower()
+            if normalized in {"group", "group_message", "groupmessage"}:
+                return MessageType.GROUP_MESSAGE
+            if normalized in {"friend", "private", "friend_message", "privatemessage"}:
+                return MessageType.FRIEND_MESSAGE
+            if normalized in {"other", "system", "other_message"}:
+                return MessageType.OTHER_MESSAGE
+        if metadata.get("groupId") or metadata.get("group_id") or metadata.get("isGroup"):
+            return MessageType.GROUP_MESSAGE
+        return MessageType.FRIEND_MESSAGE
+
+    def _resolve_session_info(
+        self, client_id: str, metadata: dict, group_id: str | None = None
+    ) -> tuple[str, str, str]:
+        session_info = self._get_client_session(client_id)
+        user_id = metadata.get("userId") or session_info.get("user_id") or client_id
+        user_name = metadata.get("userName") or "Live2D User"
+        session_id = (
+            metadata.get("sessionId")
+            or session_info.get("session_id")
+            or group_id
+            or client_id
+        )
+        return str(user_id), str(user_name), str(session_id)
+
     async def convert_message(
         self, packet: BasePacket, client_id: str
     ) -> AstrBotMessage | None:
@@ -238,18 +274,23 @@ class Live2DPlatformAdapter(Platform):
 
             # 构造 AstrBotMessage
             abm = AstrBotMessage()
-            abm.type = MessageType.FRIEND_MESSAGE  # Live2D 桌面端视为私聊
+            message_type = self._resolve_message_type(metadata)
+            group_id = metadata.get("groupId") or metadata.get("group_id")
+            abm.type = message_type
             abm.message_str = message_str
             abm.message = message_components
             abm.self_id = self.client_self_id
-            abm.sender = MessageMember(
-                user_id=metadata.get("userId", client_id),
-                nickname=metadata.get("userName", "Live2D User"),
+            sender_id, sender_name, session_id = self._resolve_session_info(
+                client_id, metadata, str(group_id) if group_id else None
             )
-            abm.session_id = metadata.get("sessionId", client_id)
-            abm.message_id = packet.id
-            abm.timestamp = packet.ts
+            abm.sender = MessageMember(user_id=sender_id, nickname=sender_name)
+            abm.session_id = session_id
+            message_id = metadata.get("messageId") or packet.id
+            abm.message_id = str(message_id)
+            abm.timestamp = int(packet.ts)
             abm.raw_message = packet.payload
+            if message_type == MessageType.GROUP_MESSAGE and group_id:
+                abm.group_id = str(group_id)
 
             logger.info(f"[Live2D] 转换消息: {message_str[:50]}...")
             return abm
@@ -258,12 +299,64 @@ class Live2DPlatformAdapter(Platform):
             logger.error(f"[Live2D] 转换消息失败: {e}", exc_info=True)
             return None
 
-    async def handle_msg(self, abm: AstrBotMessage, client_id: str):
+    def convert_touch(self, packet: BasePacket, client_id: str) -> AstrBotMessage:
+        """将 input.touch 转换为 AstrBotMessage"""
+        payload = packet.payload or {}
+        part = payload.get("part") or payload.get("area") or "Unknown"
+        action = payload.get("action") or "tap"
+        details = [f"part={part}", f"action={action}"]
+        if payload.get("x") is not None:
+            details.append(f"x={payload.get('x')}")
+        if payload.get("y") is not None:
+            details.append(f"y={payload.get('y')}")
+        if payload.get("duration") is not None:
+            details.append(f"duration={payload.get('duration')}")
+        message_str = "[touch] " + " ".join(details)
+
+        abm = AstrBotMessage()
+        abm.type = MessageType.OTHER_MESSAGE
+        abm.message_str = message_str
+        abm.message = [Plain(message_str)] if Plain else []
+        abm.self_id = self.client_self_id
+        sender_id, sender_name, session_id = self._resolve_session_info(client_id, {})
+        abm.sender = MessageMember(user_id=sender_id, nickname=sender_name)
+        abm.session_id = session_id
+        abm.message_id = packet.id
+        abm.timestamp = int(packet.ts)
+        abm.raw_message = packet.payload
+        return abm
+
+    def convert_shortcut(self, packet: BasePacket, client_id: str) -> AstrBotMessage:
+        """将 input.shortcut 转换为 AstrBotMessage"""
+        payload = packet.payload or {}
+        key = payload.get("key") or ""
+        message_str = f"[shortcut] key={key}" if key else "[shortcut]"
+
+        abm = AstrBotMessage()
+        abm.type = MessageType.OTHER_MESSAGE
+        abm.message_str = message_str
+        abm.message = [Plain(message_str)] if Plain else []
+        abm.self_id = self.client_self_id
+        sender_id, sender_name, session_id = self._resolve_session_info(client_id, {})
+        abm.sender = MessageMember(user_id=sender_id, nickname=sender_name)
+        abm.session_id = session_id
+        abm.message_id = packet.id
+        abm.timestamp = int(packet.ts)
+        abm.raw_message = packet.payload
+        return abm
+
+    async def handle_msg(
+        self,
+        abm: AstrBotMessage,
+        client_id: str,
+        extras: dict[str, object] | None = None,
+    ):
         """处理转换后的 AstrBotMessage，创建事件并提交到队列
 
         Args:
             abm: AstrBotMessage 对象
             client_id: 客户端 ID
+            extras: 事件附加信息
         """
         try:
             # 创建 Live2DMessageEvent
@@ -286,6 +379,10 @@ class Live2DPlatformAdapter(Platform):
                 },
                 resource_manager=self.resource_manager,
             )
+            message_event.set_extra("live2d_client_id", client_id)
+            if extras:
+                for key, value in extras.items():
+                    message_event.set_extra(key, value)
 
             # 提交事件到 AstrBot 事件队列
             self.commit_event(message_event)
@@ -371,24 +468,39 @@ class Live2DPlatformAdapter(Platform):
 
     async def _setup_message_handler(self):
         """设置消息处理器，覆盖 handler.py 的行为以接入 AstrBot"""
-        original_handle_message_input = self.ws_server.handler.handle_message_input
+        ws_server = self.ws_server
+        if not ws_server:
+            raise RuntimeError("[Live2D] WebSocket 服务器未初始化")
 
-        async def new_handle_message_input(packet: BasePacket, client_id: str):
-            """新的消息处理器 - 接入 AstrBot 事件流程"""
-            # 记录当前客户端ID
+        async def on_message_received(client_id: str, packet: BasePacket):
+            """统一消息处理器 - 接入 AstrBot 事件流程"""
             self.current_client_id = client_id
 
-            # 转换为 AstrBotMessage
-            abm = await self.convert_message(packet, client_id)
-            if abm:
-                # 提交事件到 AstrBot
-                await self.handle_msg(abm, client_id)
+            if packet.op == Protocol.OP_INPUT_MESSAGE:
+                abm = await self.convert_message(packet, client_id)
+                if abm:
+                    await self.handle_msg(
+                        abm, client_id, extras={"live2d_op": packet.op}
+                    )
+                return
 
-            # 不返回任何响应，由 AstrBot 处理后通过 Live2DMessageEvent.send() 发送
-            return None
+            if packet.op == Protocol.OP_INPUT_TOUCH:
+                abm = self.convert_touch(packet, client_id)
+                await self.handle_msg(
+                    abm, client_id, extras={"live2d_op": packet.op}
+                )
+                return
 
-        # 替换 handler 的方法
-        self.ws_server.handler.handle_message_input = new_handle_message_input
+            if packet.op == Protocol.OP_INPUT_SHORTCUT:
+                abm = self.convert_shortcut(packet, client_id)
+                await self.handle_msg(
+                    abm, client_id, extras={"live2d_op": packet.op}
+                )
+                return
+
+            logger.debug(f"[Live2D] 未处理的消息类型: {packet.op}")
+
+        ws_server.handler.on_message_received = on_message_received
 
     async def terminate(self):
         """终止平台适配器运行"""

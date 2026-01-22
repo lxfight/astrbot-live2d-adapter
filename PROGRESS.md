@@ -110,9 +110,6 @@
   - `OutputMessageConverter` - AstrBot `MessageChain` → `perform.show.sequence`
 - [live2d_event.py](live2d_event.py) - `Live2DMessageEvent`（AstrBot 事件，负责输出推送）
 
-**其他：**
-- [http_server.py](http_server.py) - aiohttp 静态资源托管（暂未启用）
-
 ---
 
 ## 3. 协议实现矩阵（对照 L2D-Bridge v1.0）
@@ -135,13 +132,13 @@
 ### 3.3 表演级（Server → Client）
 
 - [x] `perform.show`：`protocol.py` 已提供 `create_perform_show`，`live2d_event.py` 会下发 `perform.show`
-- [ ] `perform.interrupt`：`protocol.py` 有构造函数，未见完整触发/使用路径
+- [x] `perform.interrupt`：已补齐触发与指令路径
 
 ### 3.4 状态同步
 
-- [ ] `state.ready`：未接入
-- [ ] `state.playing`：未接入
-- [ ] `state.config`：未接入
+- [x] `state.ready`：已接入
+- [x] `state.playing`：已接入
+- [x] `state.config`：已接入
 
 ---
 
@@ -164,6 +161,7 @@
 - [x] `/live2d reload`：重载配置（[commands.py:87](commands.py:87)，占位实现）
 - [x] `/live2d status`：查看连接/会话状态（[commands.py:49](commands.py:49)）
 - [x] `/live2d say <text>`：仅下发 text 表演（[commands.py:98](commands.py:98)）
+- [x] `/live2d interrupt`：中断表演（新增）
 
 ---
 
@@ -186,14 +184,13 @@
 - [ ] 修复指令中获取适配器实例的方法（当前 `_get_live2d_adapter()` 可能无法工作）
 
 **中优先级（协议完整性）：**
-- [ ] `state.ready` / `state.playing` 状态上报
-- [ ] `state.config` 配置推送
-- [ ] `perform.interrupt` 完整触发路径
+- [x] `state.ready` / `state.playing` 状态上报
+- [x] `state.config` 配置推送
+- [x] `perform.interrupt` 完整触发路径
 
 **低优先级（增强功能）：**
 - [ ] 多模态全链路验证（图片 Base64、语音 STT/TTS）
 - [ ] 错误码规范化与详细日志
-- [ ] HTTP 静态服务器启用（托管桌面端前端）
 - [ ] `/live2d reload` 的实际配置重载实现
 
 ---

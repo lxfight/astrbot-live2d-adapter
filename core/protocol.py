@@ -89,6 +89,30 @@ class Protocol:
     OP_RESOURCE_RELEASE = "resource.release"
     OP_RESOURCE_PROGRESS = "resource.progress"
 
+    # 模型控制指令
+    OP_MODEL_LIST = "model.list"
+    OP_MODEL_LOAD = "model.load"
+    OP_MODEL_UNLOAD = "model.unload"
+    OP_MODEL_STATE = "model.state"
+    OP_MODEL_SET_EXPRESSION = "model.setExpression"
+    OP_MODEL_PLAY_MOTION = "model.playMotion"
+    OP_MODEL_SET_PARAMETER = "model.setParameter"
+    OP_MODEL_LOOK_AT = "model.lookAt"
+    OP_MODEL_SPEAK = "model.speak"
+    OP_MODEL_STOP = "model.stop"
+
+    # 桌面控制指令
+    OP_DESKTOP_WINDOW_SHOW = "desktop.window.show"
+    OP_DESKTOP_WINDOW_HIDE = "desktop.window.hide"
+    OP_DESKTOP_WINDOW_MOVE = "desktop.window.move"
+    OP_DESKTOP_WINDOW_RESIZE = "desktop.window.resize"
+    OP_DESKTOP_WINDOW_SET_OPACITY = "desktop.window.setOpacity"
+    OP_DESKTOP_WINDOW_SET_TOPMOST = "desktop.window.setTopmost"
+    OP_DESKTOP_WINDOW_SET_CLICK_THROUGH = "desktop.window.setClickThrough"
+    OP_DESKTOP_TRAY_NOTIFY = "desktop.tray.notify"
+    OP_DESKTOP_OPEN_URL = "desktop.openUrl"
+    OP_DESKTOP_CAPTURE_SCREENSHOT = "desktop.capture.screenshot"
+
     # 错误码 - 系统错误
     ERROR_AUTH_FAILED = 4001
     ERROR_VERSION_MISMATCH = 4002
@@ -134,9 +158,9 @@ class Protocol:
         request_id: str,
         session_id: str,
         user_id: str,
-        features: list[str] = None,
+        features: list[str] | None = None,
         capabilities: list[str] | None = None,
-        config: dict[str, Any] = None,
+        config: dict[str, Any] | None = None,
     ) -> BasePacket:
         """创建握手确认包"""
         if features is None:
@@ -149,8 +173,15 @@ class Protocol:
                 "perform.show",
                 "perform.interrupt",
                 "resource.prepare",
+                "resource.commit",
                 "resource.get",
                 "resource.release",
+                "resource.progress",
+                "state.ready",
+                "state.playing",
+                "state.config",
+                "model.*",
+                "desktop.*",
             ]
         if config is None:
             config = {
@@ -193,6 +224,29 @@ class Protocol:
         """创建中断表演指令"""
         return Protocol.create_packet(
             Protocol.OP_PERFORM_INTERRUPT, packet_id=packet_id
+        )
+
+    @staticmethod
+    def create_state_ready(client_id: str, packet_id: str | None = None) -> BasePacket:
+        """创建状态就绪事件"""
+        return Protocol.create_packet(
+            Protocol.OP_STATE_READY, payload={"clientId": client_id}, packet_id=packet_id
+        )
+
+    @staticmethod
+    def create_state_playing(is_playing: bool, packet_id: str | None = None) -> BasePacket:
+        """创建播放状态事件"""
+        return Protocol.create_packet(
+            Protocol.OP_STATE_PLAYING,
+            payload={"isPlaying": is_playing},
+            packet_id=packet_id,
+        )
+
+    @staticmethod
+    def create_state_config(payload: dict[str, Any], packet_id: str | None = None) -> BasePacket:
+        """创建配置状态事件"""
+        return Protocol.create_packet(
+            Protocol.OP_STATE_CONFIG, payload=payload, packet_id=packet_id
         )
 
 

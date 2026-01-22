@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Callable
 
+from ..core.config import ConfigLike
 from ..core.protocol import BasePacket, Protocol
 
 logger = logging.getLogger(__name__)
@@ -11,11 +12,12 @@ logger = logging.getLogger(__name__)
 class MessageHandler:
     """消息处理器"""
 
-    def __init__(self, config, resource_manager=None):
+    def __init__(self, config: ConfigLike, resource_manager=None):
         self.config = config
         self.resource_manager = resource_manager
         # 消息接收回调函数（由平台适配器注入）
         self.on_message_received: Callable | None = None
+        self.client_states: dict[str, dict] = {}
 
     async def handle_packet(
         self, packet: BasePacket, client_id: str
@@ -59,6 +61,18 @@ class MessageHandler:
         elif packet.op == Protocol.OP_RESOURCE_RELEASE:
             return await self.handle_resource_release(packet)
 
+        elif packet.op == Protocol.OP_RESOURCE_PROGRESS:
+            return await self.handle_resource_progress(packet, client_id)
+
+        elif packet.op == Protocol.OP_STATE_READY:
+            return await self.handle_state_ready(packet, client_id)
+
+        elif packet.op == Protocol.OP_STATE_PLAYING:
+            return await self.handle_state_playing(packet, client_id)
+
+        elif packet.op == Protocol.OP_STATE_CONFIG:
+            return await self.handle_state_config(packet, client_id)
+
         else:
             logger.warning(f"未知的操作码: {packet.op}")
             return None
@@ -89,6 +103,10 @@ class MessageHandler:
         # 生成会话信息
         session_id = f"live2d_session_{client_id}"
         user_id = f"live2d_user_{client_id}"
+        self.client_states.setdefault(client_id, {})["session"] = {
+            "session_id": session_id,
+            "user_id": user_id,
+        }
 
         logger.info(
             f"客户端 {client_id} 握手成功，分配 session_id: {session_id}, user_id: {user_id}"
@@ -117,6 +135,13 @@ class MessageHandler:
         self, packet: BasePacket, client_id: str
     ) -> BasePacket | None:
         """处理触摸输入"""
+        if self.on_message_received:
+            try:
+                await self.on_message_received(client_id, packet)
+            except Exception as e:
+                logger.error(f"触摸事件回调失败: {e}", exc_info=True)
+            return None
+
         payload = packet.payload or {}
         part = payload.get("part") or payload.get("area") or "Unknown"
         action = payload.get("action", "tap")
@@ -183,6 +208,13 @@ class MessageHandler:
         self, packet: BasePacket, client_id: str
     ) -> BasePacket | None:
         """处理快捷键输入"""
+        if self.on_message_received:
+            try:
+                await self.on_message_received(client_id, packet)
+            except Exception as e:
+                logger.error(f"快捷键事件回调失败: {e}", exc_info=True)
+            return None
+
         payload = packet.payload or {}
         key = payload.get("key", "")
 
@@ -285,3 +317,38 @@ class MessageHandler:
             payload={"rid": rid, "released": True},
             packet_id=packet.id,
         )
+
+    async def handle_resource_progress(
+        self, packet: BasePacket, client_id: str
+    ) -> BasePacket | None:
+        """处理资源传输进度事件"""
+        payload = packet.payload or {}
+        logger.debug(f"客户端 {client_id} 资源进度: {payload}")
+        return None
+
+    async def handle_state_ready(
+        self, packet: BasePacket, client_id: str
+    ) -> BasePacket | None:
+        """处理客户端就绪状态"""
+        payload = packet.payload or {}
+        self.client_states.setdefault(client_id, {})["ready"] = payload
+        logger.info(f"客户端 {client_id} 状态就绪: {payload}")
+        return None
+
+    async def handle_state_playing(
+        self, packet: BasePacket, client_id: str
+    ) -> BasePacket | None:
+        """处理播放状态更新"""
+        payload = packet.payload or {}
+        self.client_states.setdefault(client_id, {})["playing"] = payload
+        logger.info(f"客户端 {client_id} 播放状态: {payload}")
+        return None
+
+    async def handle_state_config(
+        self, packet: BasePacket, client_id: str
+    ) -> BasePacket | None:
+        """处理配置同步事件"""
+        payload = packet.payload or {}
+        self.client_states.setdefault(client_id, {})["config"] = payload
+        logger.info(f"客户端 {client_id} 配置更新: {payload}")
+        return None

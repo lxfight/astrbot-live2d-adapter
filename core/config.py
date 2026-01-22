@@ -1,7 +1,7 @@
 """配置管理模块"""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 
@@ -70,22 +70,6 @@ class Config:
         return self.get("events.enable_perform", True)
 
     @property
-    def http_enabled(self) -> bool:
-        return self.get("http.enabled", False)
-
-    @property
-    def http_host(self) -> str:
-        return self.get("http.host", "0.0.0.0")
-
-    @property
-    def http_port(self) -> int:
-        return self.get("http.port", 8080)
-
-    @property
-    def http_static_dir(self) -> str:
-        return self.get("http.static_dir", "../astrbot-live2d-desktop/dist")
-
-    @property
     def resource_enabled(self) -> bool:
         return self.get("resource.enabled", True)
 
@@ -122,3 +106,47 @@ class Config:
     @property
     def resource_max_inline_bytes(self) -> int:
         return int(self.get("resource.max_inline_bytes", 262144))
+
+
+class ConfigLike(Protocol):
+    @property
+    def server_host(self) -> str: ...
+
+    @property
+    def server_port(self) -> int: ...
+
+    @property
+    def auth_token(self) -> str: ...
+
+    @property
+    def ws_path(self) -> str: ...
+
+    @property
+    def max_connections(self) -> int: ...
+
+    @property
+    def kick_old(self) -> bool: ...
+
+    @property
+    def resource_enabled(self) -> bool: ...
+
+    @property
+    def resource_host(self) -> str: ...
+
+    @property
+    def resource_port(self) -> int: ...
+
+    @property
+    def resource_path(self) -> str: ...
+
+    @property
+    def resource_dir(self) -> str: ...
+
+    @property
+    def resource_base_url(self) -> str: ...
+
+    @property
+    def resource_token(self) -> str: ...
+
+    @property
+    def resource_max_inline_bytes(self) -> int: ...

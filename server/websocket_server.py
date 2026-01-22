@@ -1,17 +1,15 @@
 """WebSocket 服务器"""
 
-import asyncio
-import logging
+from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import websockets
-from websockets.server import WebSocketServerProtocol
 
-from ..core.config import Config
+from ..core.config import ConfigLike
 from ..core.protocol import BasePacket, Protocol
-
 from .message_handler import MessageHandler
 
 logger = logging.getLogger(__name__)
@@ -20,13 +18,13 @@ logger = logging.getLogger(__name__)
 class WebSocketServer:
     """WebSocket 服务器"""
 
-    def __init__(self, config: Config, resource_manager=None):
+    def __init__(self, config: ConfigLike, resource_manager=None):
         self.config = config
         self.handler = MessageHandler(config, resource_manager=resource_manager)
-        self.clients: dict[str, WebSocketServerProtocol] = {}
+        self.clients: dict[str, Any] = {}
         self.server = None
 
-    async def register(self, websocket: WebSocketServerProtocol, client_id: str):
+    async def register(self, websocket, client_id: str):
         """注册客户端连接"""
         # 检查连接数限制
         if len(self.clients) >= self.config.max_connections:
@@ -73,7 +71,7 @@ class WebSocketServer:
         for client_id in disconnected:
             await self.unregister(client_id)
 
-    async def handle_client(self, websocket: WebSocketServerProtocol):
+    async def handle_client(self, websocket):
         """处理客户端连接
 
         兼容 websockets 新版本：handler 只接收一个参数（连接对象），path 可从连接对象上获取。
@@ -84,9 +82,12 @@ class WebSocketServer:
             req = getattr(websocket, "request", None)
             path = getattr(req, "path", None)
 
-        # 校验 WebSocket 路径
+        # 校验 WebSocket 路径（兼容 /ws 与 /astrbot/live2d）
         if path and self.config.ws_path:
-            if path != self.config.ws_path:
+            allowed_paths = {self.config.ws_path}
+            allowed_paths.add("/ws")
+            allowed_paths.add("/astrbot/live2d")
+            if path not in allowed_paths:
                 logger.warning(
                     f"拒绝连接: 路径不匹配 (期望: {self.config.ws_path}, 实际: {path})"
                 )
@@ -103,6 +104,8 @@ class WebSocketServer:
         try:
             # 等待握手
             message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            if isinstance(message, bytes):
+                message = message.decode("utf-8", errors="replace")
             packet = BasePacket.from_json(message)
 
             if packet.op != Protocol.OP_HANDSHAKE:
@@ -124,6 +127,9 @@ class WebSocketServer:
 
             # 处理握手
             response = await self.handler.handle_packet(packet, client_id)
+            if response is None:
+                logger.error("握手响应为空")
+                return
             await websocket.send(response.to_json())
 
             # 如果握手失败，关闭连接
@@ -143,6 +149,8 @@ class WebSocketServer:
             # 消息循环
             async for message in websocket:
                 try:
+                    if isinstance(message, bytes):
+                        message = message.decode("utf-8", errors="replace")
                     packet = BasePacket.from_json(message)
                     response = await self.handler.handle_packet(packet, client_id)
 

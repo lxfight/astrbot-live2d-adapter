@@ -119,8 +119,9 @@ class Live2DAdapterPlugin(Star):
         try:
             # 从 AstrBot 的平台管理器中获取适配器实例
             # 注意：这里需要根据实际 AstrBot 架构调整
-            if hasattr(self.context, "platforms"):
-                for platform in self.context.platforms:
+            platforms = getattr(self.context, "platforms", None)
+            if platforms:
+                for platform in platforms:
                     if isinstance(platform, Live2DPlatformAdapter):
                         return platform
 
