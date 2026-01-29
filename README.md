@@ -10,7 +10,7 @@
 ## 特性
 
 ✅ **完整的平台适配器**
-- 作为 AstrBot 官方平台插件运行
+- 作为 AstrBot 平台插件运行
 - 支持 WebSocket 通讯（L2D-Bridge Protocol v1.0）
 - 单连接约束、握手鉴权、心跳保活
 
@@ -40,7 +40,7 @@
 1. 将本项目放入 AstrBot 插件目录（示例路径按你的安装位置调整）：
 
 ```bash
-cd <AstrBot安装目录>/addons/plugins
+cd <AstrBot安装目录>/data/plugins
 # 将本仓库复制/克隆到该目录下
 ```
 
@@ -68,18 +68,31 @@ python main.py
 在 AstrBot Dashboard 中配置 Live2D 平台适配器：
 
 ```yaml
-server:
-  host: "0.0.0.0"          # WebSocket 监听地址
-  port: 8765               # WebSocket 端口
-  path: "/ws"              # WebSocket 路径
-  max_connections: 1       # 最大连接数（建议保持为 1）
-  kick_old: true           # 新连接时踢掉旧连接
-  auth_token: ""           # 鉴权 Token（留空则不鉴权）
+type: "live2d"
+enable: true
+id: "live2d_default"
+
+ws_host: "0.0.0.0"         # WebSocket 监听地址
+ws_port: 9090              # WebSocket 端口
+ws_path: "/astrbot/live2d" # WebSocket 路径（桌面端默认使用该路径）
+auth_token: ""             # 鉴权 Token（留空则不鉴权）
+max_connections: 1         # 最大连接数（建议保持为 1）
+kick_old: true             # 新连接时踢掉旧连接
 
 # 功能开关
 enable_auto_emotion: true  # 自动情感识别和动作匹配
 enable_tts: false          # 是否启用 TTS（由 AstrBot TTS 插件提供）
 tts_mode: "local"          # TTS 模式：local（桌面端处理）/ remote（服务端处理）
+
+# 资源服务（图片/语音等大资源传输，建议开启）
+resource_enabled: true
+resource_host: "0.0.0.0"
+resource_port: 9091
+resource_path: "/resources"
+resource_dir: "./data/live2d_resources"
+resource_base_url: ""      # 为空时自动使用 http://{host}:{port}
+resource_token: ""         # 为空时复用 auth_token
+resource_max_inline_bytes: 262144
 ```
 
 ## 使用
@@ -122,16 +135,17 @@ astrbot-live2d-adapter/
 
 使用 **L2D-Bridge Protocol v1.0**。
 
-说明：协议文档通常与桌面端项目一起维护；如果你将本适配器独立发布，请将协议文档一并带上并在此处补充链接。
+协议文档：
+- https://github.com/lxfight/astrbot-live2d-desktop/blob/master/docs/API.md
 
 ## 许可证
 
-（待添加；公开仓库前建议补齐 LICENSE 文件）
+MIT
 
 ## 相关项目
 
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot) - 多平台机器人框架
-- [astrbot-live2d-desktop](../astrbot-live2d-desktop) - Live2D 桌面端应用
+- [astrbot-live2d-desktop](https://github.com/lxfight/astrbot-live2d-desktop) - Live2D 桌面端应用
 
 ## 贡献
 

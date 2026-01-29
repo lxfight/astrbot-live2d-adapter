@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @register(
     "live2d_adapter",
-    "AstrBot Team",
+    "lxfight",
     "Live2D 桌面应用平台适配器，支持 Live2D-Bridge Protocol v1.0",
     "1.0.0",
 )

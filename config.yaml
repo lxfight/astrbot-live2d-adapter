@@ -1,8 +1,8 @@
 server:
   host: "0.0.0.0"
   port: 9090
-  auth_token: "secret"
-  path: "/ws"
+  auth_token: ""
+  path: "/astrbot/live2d"
   max_connections: 1
   kick_old: true
 
