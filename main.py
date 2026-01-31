@@ -56,7 +56,7 @@ class Live2DAdapterPlugin(Star):
                 if not adapter:
                     await event.send(MessageChain([Plain("[Live2D] 适配器未启动")]))
                     return
-                self.commands_handler = Live2DCommands(adapter)
+                self.commands_handler = Live2DCommands(adapter, context=self.context)
 
             result = await self.commands_handler.handle_command("status", [])
             if result:
@@ -74,7 +74,7 @@ class Live2DAdapterPlugin(Star):
                 if not adapter:
                     await event.send(MessageChain([Plain("[Live2D] 适配器未启动")]))
                     return
-                self.commands_handler = Live2DCommands(adapter)
+                self.commands_handler = Live2DCommands(adapter, context=self.context)
 
             result = await self.commands_handler.handle_command("reload", [])
             if result:
@@ -98,7 +98,7 @@ class Live2DAdapterPlugin(Star):
                 if not adapter:
                     await event.send(MessageChain([Plain("[Live2D] 适配器未启动")]))
                     return
-                self.commands_handler = Live2DCommands(adapter)
+                self.commands_handler = Live2DCommands(adapter, context=self.context)
 
             result = await self.commands_handler.handle_command("say", [text])
             if result:
@@ -116,7 +116,7 @@ class Live2DAdapterPlugin(Star):
                 if not adapter:
                     await event.send(MessageChain([Plain("[Live2D] 适配器未启动")]))
                     return
-                self.commands_handler = Live2DCommands(adapter)
+                self.commands_handler = Live2DCommands(adapter, context=self.context)
 
             result = await self.commands_handler.handle_command("interrupt", [])
             if result:
@@ -134,7 +134,9 @@ class Live2DAdapterPlugin(Star):
         try:
             platform_manager = getattr(self.context, "platform_manager", None)
             if not platform_manager or not getattr(platform_manager, "get_insts", None):
-                logger.warning("[Live2D] context.platform_manager 不可用，无法获取适配器实例")
+                logger.warning(
+                    "[Live2D] context.platform_manager 不可用，无法获取适配器实例"
+                )
                 return None
 
             platforms = platform_manager.get_insts()
@@ -142,7 +144,9 @@ class Live2DAdapterPlugin(Star):
                 p for p in platforms if isinstance(p, Live2DPlatformAdapter)
             ]
             if not live2d_insts:
-                logger.warning("[Live2D] 未找到 Live2D 平台适配器实例（可能未启用平台配置）")
+                logger.warning(
+                    "[Live2D] 未找到 Live2D 平台适配器实例（可能未启用平台配置）"
+                )
                 return None
 
             if len(live2d_insts) > 1:
@@ -151,7 +155,9 @@ class Live2DAdapterPlugin(Star):
                     try:
                         ids.append(inst.meta().id)
                     except Exception:
-                        ids.append(str(getattr(inst, "config", {}).get("id", "unknown")))
+                        ids.append(
+                            str(getattr(inst, "config", {}).get("id", "unknown"))
+                        )
                 logger.info(
                     "[Live2D] 检测到多个 Live2D 平台适配器实例，将使用第一个。实例ID: %s",
                     ", ".join(ids),

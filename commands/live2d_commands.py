@@ -3,24 +3,18 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from astrbot.api.event import MessageChain as MessageChainType
-
-    from ..adapters.platform_adapter import Live2DPlatformAdapter
-else:
-    MessageChainType = object
 
 try:
     from astrbot.api import logger as _astr_logger
     from astrbot.api.event import MessageChain
     from astrbot.api.message_components import Plain
-except ImportError:
-    _astr_logger = None
-    MessageChain = None
-    Plain = None
+    from astrbot.api.star import Context
+except Exception as e:  # pragma: no cover
+    raise ImportError(
+        f"Failed to import AstrBot runtime modules; this adapter must run inside AstrBot: {e}"
+    )
 
+from ..adapters.platform_adapter import Live2DPlatformAdapter
 from ..core.protocol import Protocol, create_motion_element, create_text_element
 
 logger = _astr_logger or logging.getLogger(__name__)
@@ -29,17 +23,19 @@ logger = _astr_logger or logging.getLogger(__name__)
 class Live2DCommands:
     """Live2D 适配器指令处理器"""
 
-    def __init__(self, adapter: Live2DPlatformAdapter):
+    def __init__(self, adapter: Live2DPlatformAdapter, context: Context | None = None):
         """初始化指令处理器
 
         Args:
             adapter: Live2D 平台适配器实例
+            context: AstrBot plugin context (used for hot reload)
         """
         self.adapter = adapter
+        self.context = context
 
     async def handle_command(
         self, command: str, args: list[str]
-    ) -> MessageChainType | None:
+    ) -> MessageChain | None:
         """处理指令
 
         Args:
@@ -62,7 +58,7 @@ class Live2DCommands:
                 f"未知指令: /live2d {command}\n可用指令: status, reload, say, interrupt"
             )
 
-    async def _cmd_status(self, args: list[str]) -> MessageChainType | None:
+    async def _cmd_status(self, args: list[str]) -> MessageChain | None:
         """/live2d status - 查看连接状态"""
         try:
             ws_server = self.adapter.ws_server
@@ -100,20 +96,43 @@ class Live2DCommands:
             logger.error(f"[Live2D] status 指令执行失败: {e}", exc_info=True)
             return self._make_chain(f"[Live2D] 查询状态失败: {e}")
 
-    async def _cmd_reload(self, args: list[str]) -> MessageChainType | None:
+    async def _cmd_reload(self, args: list[str]) -> MessageChain | None:
         """/live2d reload - 重载配置"""
         try:
-            # 注意：实际配置重载需要从 AstrBot 配置系统获取
-            # 这里仅作为示例实现
-            return self._make_chain(
-                "[Live2D] 配置重载功能待实现\n提示: 当前配置已绑定到 AstrBot，请通过 AstrBot 后台修改配置"
+            if not self.context or not getattr(self.context, "platform_manager", None):
+                return self._make_chain("[Live2D] Reload is unavailable (no context).")
+
+            platform_id = self.adapter.meta().id
+            platform_manager = self.context.platform_manager
+
+            platform_config = None
+            for cfg in getattr(platform_manager, "platforms_config", []) or []:
+                if cfg.get("type") == "live2d" and cfg.get("id") == platform_id:
+                    platform_config = cfg
+                    break
+
+            platform_config = platform_config or getattr(
+                self.adapter, "platform_config", None
             )
+            if not platform_config:
+                return self._make_chain("[Live2D] Failed to locate platform config.")
+
+            await platform_manager.reload(platform_config)
+
+            try:
+                new_inst = self.context.get_platform_inst(platform_id)
+                if isinstance(new_inst, Live2DPlatformAdapter):
+                    self.adapter = new_inst
+            except Exception:
+                pass
+
+            return self._make_chain(f"[Live2D] Reloaded platform: {platform_id}")
 
         except Exception as e:
             logger.error(f"[Live2D] reload 指令执行失败: {e}", exc_info=True)
             return self._make_chain(f"[Live2D] 重载配置失败: {e}")
 
-    async def _cmd_say(self, args: list[str]) -> MessageChainType | None:
+    async def _cmd_say(self, args: list[str]) -> MessageChain | None:
         """/live2d say <text> - 直接向 Live2D 客户端发送文本表演"""
         if not args:
             return self._make_chain("[Live2D] 用法: /live2d say <要说的内容>")
@@ -142,7 +161,7 @@ class Live2DCommands:
             logger.error(f"[Live2D] say 指令执行失败: {e}", exc_info=True)
             return self._make_chain(f"[Live2D] 发送失败: {e}")
 
-    async def _cmd_interrupt(self, args: list[str]) -> MessageChainType | None:
+    async def _cmd_interrupt(self, args: list[str]) -> MessageChain | None:
         """/live2d interrupt - 中断客户端当前表演"""
         try:
             ws_server = self.adapter.ws_server
@@ -159,7 +178,7 @@ class Live2DCommands:
             logger.error(f"[Live2D] interrupt 指令执行失败: {e}", exc_info=True)
             return self._make_chain(f"[Live2D] 中断失败: {e}")
 
-    def _make_chain(self, text: str) -> MessageChainType | None:
+    def _make_chain(self, text: str) -> MessageChain | None:
         """创建消息链
 
         Args:
@@ -168,8 +187,6 @@ class Live2DCommands:
         Returns:
             MessageChain 对象
         """
-        if MessageChain and Plain:
-            return MessageChain([Plain(text)])
-        else:
-            # 兼容性处理
-            return None
+        chain = MessageChain()
+        chain.chain.append(Plain(text))
+        return chain

@@ -57,6 +57,7 @@ from ..core.protocol import (
     create_motion_element,
     create_text_element,
     create_tts_element,
+    create_video_element,
 )
 
 
@@ -145,6 +146,12 @@ class OutputMessageConverter:
                 if audio_element:
                     sequence.append(audio_element)
 
+            elif Video and isinstance(component, Video):
+                video_element = self._build_video_element(component)
+                if video_element:
+                    sequence.append(video_element)
+                    full_text += "[视频]"
+
             elif File and isinstance(component, File):
                 file_element = self._build_file_text_element(component)
                 if file_element:
@@ -221,7 +228,22 @@ class OutputMessageConverter:
                 return file_path
         return None
 
-    def _build_resource_element(self, file_path: str, kind: str) -> dict[str, Any] | None:
+    def _get_video_url(self, video: Any) -> str | None:
+        """获取视频 URL"""
+        if hasattr(video, "file"):
+            file_path = video.file
+            if file_path.startswith("http://") or file_path.startswith("https://"):
+                return file_path
+            if file_path.startswith("file://"):
+                local_path = file_path.replace("file:///", "", 1)
+                return local_path
+            if os.path.isfile(file_path):
+                return file_path
+        return None
+
+    def _build_resource_element(
+        self, file_path: str, kind: str
+    ) -> dict[str, Any] | None:
         if not file_path:
             return None
         if file_path.startswith("http://") or file_path.startswith("https://"):
@@ -233,11 +255,19 @@ class OutputMessageConverter:
                 f"file:///{file_path}" if os.name == "nt" else f"file://{file_path}"
             )
             return {"url": file_url}
-        return self.resource_manager.build_reference_from_file(file_path, kind)
+        try:
+            return self.resource_manager.build_reference_from_file(file_path, kind)
+        except Exception:
+            file_url = (
+                f"file:///{file_path}" if os.name == "nt" else f"file://{file_path}"
+            )
+            return {"url": file_url}
 
     def _build_image_element(self, image: Any) -> dict[str, Any] | None:
         image_path = self._get_image_url(image)
-        resource_ref = self._build_resource_element(image_path, "image") if image_path else None
+        resource_ref = (
+            self._build_resource_element(image_path, "image") if image_path else None
+        )
         if not resource_ref:
             return None
         return create_image_element(
@@ -250,7 +280,9 @@ class OutputMessageConverter:
 
     def _build_audio_element(self, record: Any) -> dict[str, Any] | None:
         audio_path = self._get_audio_url(record)
-        resource_ref = self._build_resource_element(audio_path, "audio") if audio_path else None
+        resource_ref = (
+            self._build_resource_element(audio_path, "audio") if audio_path else None
+        )
         if not resource_ref:
             return None
         return create_tts_element(
@@ -261,6 +293,23 @@ class OutputMessageConverter:
             tts_mode="remote",
         )
 
+    def _build_video_element(self, video: Any) -> dict[str, Any] | None:
+        video_path = self._get_video_url(video)
+        resource_ref = (
+            self._build_resource_element(video_path, "video") if video_path else None
+        )
+        if not resource_ref:
+            return None
+        return create_video_element(
+            url=resource_ref.get("url"),
+            rid=resource_ref.get("rid"),
+            inline=resource_ref.get("inline"),
+            duration=0,
+            position="center",
+            autoplay=True,
+            loop=False,
+        )
+
     def _build_file_text_element(self, file: Any) -> dict[str, Any] | None:
         name = getattr(file, "name", "") or "file"
         file_path = getattr(file, "file_", "") or ""
@@ -268,11 +317,15 @@ class OutputMessageConverter:
 
         source = file_url or file_path
         if not source:
-            return create_text_element(content=f"[file] {name}", duration=0, position="center")
+            return create_text_element(
+                content=f"[file] {name}", duration=0, position="center"
+            )
 
         ref = self._build_resource_element(source, "file")
         if not ref:
-            return create_text_element(content=f"[file] {name}", duration=0, position="center")
+            return create_text_element(
+                content=f"[file] {name}", duration=0, position="center"
+            )
 
         if ref.get("url"):
             return create_text_element(
@@ -286,7 +339,9 @@ class OutputMessageConverter:
                 duration=0,
                 position="center",
             )
-        return create_text_element(content=f"[file] {name}", duration=0, position="center")
+        return create_text_element(
+            content=f"[file] {name}", duration=0, position="center"
+        )
 
     def _build_tts_element(self, text: str, url: str) -> dict[str, Any] | None:
         resource_ref = self._build_resource_element(url, "audio")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
@@ -23,13 +24,13 @@ logger = _astr_logger or logging.getLogger(__name__)
 class WebSocketServer:
     """WebSocket 服务器"""
 
-    def __init__(self, config: ConfigLike, resource_manager=None):
+    def __init__(self, config: ConfigLike, resource_manager: Any | None = None):
         self.config = config
         self.handler = MessageHandler(config, resource_manager=resource_manager)
         self.clients: dict[str, Any] = {}
         self.server = None
-        self.on_client_connected = None
-        self.on_client_disconnected = None
+        self.on_client_connected: Callable[[str], Awaitable[None]] | None = None
+        self.on_client_disconnected: Callable[[str], Awaitable[None]] | None = None
 
     async def register(self, websocket, client_id: str):
         """注册客户端连接"""
@@ -69,7 +70,7 @@ class WebSocketServer:
                 except Exception as e:
                     logger.warning(f"on_client_disconnected callback failed: {e!s}")
 
-    async def send_to(self, client_id: str, packet: BasePacket):
+    async def send_to(self, client_id: str, packet: BasePacket) -> None:
         """Send a packet to the specified client."""
         websocket = self.clients.get(client_id)
         if not websocket:

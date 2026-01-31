@@ -274,7 +274,14 @@ class MessageHandler:
         mime = payload.get("mime", "application/octet-stream")
         size = int(payload.get("size", 0) or 0)
         sha256 = payload.get("sha256")
-        entry = self.resource_manager.prepare_upload(kind, mime, size=size, sha256=sha256)
+        try:
+            entry = self.resource_manager.prepare_upload(
+                kind, mime, size=size, sha256=sha256
+            )
+        except ValueError as e:
+            return Protocol.create_error_packet(
+                Protocol.ERROR_FILE_UPLOAD_FAILED, str(e), packet.id
+            )
         headers = {}
         if getattr(self.resource_manager, "token", None):
             headers["Authorization"] = f"Bearer {self.resource_manager.token}"

@@ -6,6 +6,19 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+__all__ = [
+    "ErrorInfo",
+    "BasePacket",
+    "Protocol",
+    "create_text_element",
+    "create_tts_element",
+    "create_image_element",
+    "create_video_element",
+    "create_motion_element",
+    "create_expression_element",
+    "create_wait_element",
+]
+
 
 @dataclass
 class ErrorInfo:
@@ -186,6 +199,7 @@ class Protocol:
                 "maxMessageLength": 5000,
                 "supportedImageFormats": ["jpg", "png", "gif", "webp"],
                 "supportedAudioFormats": ["mp3", "wav", "ogg"],
+                "supportedVideoFormats": ["mp4", "webm", "mov"],
                 "ttsProvider": "astrbot-tts",
                 "sttProvider": "astrbot-stt",
             }
@@ -228,11 +242,15 @@ class Protocol:
     def create_state_ready(client_id: str, packet_id: str | None = None) -> BasePacket:
         """创建状态就绪事件"""
         return Protocol.create_packet(
-            Protocol.OP_STATE_READY, payload={"clientId": client_id}, packet_id=packet_id
+            Protocol.OP_STATE_READY,
+            payload={"clientId": client_id},
+            packet_id=packet_id,
         )
 
     @staticmethod
-    def create_state_playing(is_playing: bool, packet_id: str | None = None) -> BasePacket:
+    def create_state_playing(
+        is_playing: bool, packet_id: str | None = None
+    ) -> BasePacket:
         """创建播放状态事件"""
         return Protocol.create_packet(
             Protocol.OP_STATE_PLAYING,
@@ -241,7 +259,9 @@ class Protocol:
         )
 
     @staticmethod
-    def create_state_config(payload: dict[str, Any], packet_id: str | None = None) -> BasePacket:
+    def create_state_config(
+        payload: dict[str, Any], packet_id: str | None = None
+    ) -> BasePacket:
         """创建配置状态事件"""
         return Protocol.create_packet(
             Protocol.OP_STATE_CONFIG, payload=payload, packet_id=packet_id
@@ -304,6 +324,35 @@ def create_image_element(
 ) -> dict[str, Any]:
     """创建图片展示元素"""
     element = {"type": "image", "duration": duration, "position": position}
+    if url:
+        element["url"] = url
+    if rid:
+        element["rid"] = rid
+    if inline:
+        element["inline"] = inline
+    if size:
+        element["size"] = size
+    return element
+
+
+def create_video_element(
+    url: str | None = None,
+    duration: int = 0,
+    position: str = "center",
+    size: dict[str, int] | None = None,
+    rid: str | None = None,
+    inline: str | None = None,
+    autoplay: bool = True,
+    loop: bool = False,
+) -> dict[str, Any]:
+    """创建视频元素"""
+    element = {
+        "type": "video",
+        "duration": duration,
+        "position": position,
+        "autoplay": autoplay,
+        "loop": loop,
+    }
     if url:
         element["url"] = url
     if rid:

@@ -18,9 +18,9 @@
 - 桌面端输入 → AstrBot 消息链
 - AstrBot 回复 → Live2D 表演序列（文字、动作、表情、TTS）
 
-✅ **情感识别**
-- 自动分析消息情感（开心、难过、生气等）
-- 自动匹配 Live2D 动作和表情
+✅ **动作类型提示（motionType）**
+- 适配器端根据文本内容推断动作类型（keyword-based）
+- 桌面端可按类型自行选择/随机动作与表情（避免硬编码具体资源 ID）
 
 ✅ **流式输出支持**（可选）
 - 逐块发送 LLM 生成内容
@@ -80,7 +80,7 @@ max_connections: 1         # 最大连接数（建议保持为 1）
 kick_old: true             # 新连接时踢掉旧连接
 
 # 功能开关
-enable_auto_emotion: true  # 自动情感识别和动作匹配
+enable_auto_emotion: true  # 发送 motionType 提示（桌面端按类型选择动作/表情）
 enable_tts: false          # 是否启用 TTS（由 AstrBot TTS 插件提供）
 tts_mode: "local"          # TTS 模式：local（桌面端处理）/ remote（服务端处理）
 

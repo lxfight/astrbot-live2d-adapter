@@ -4,28 +4,50 @@ import base64
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 try:
-    from astrbot.api.message_components import File, Image, Plain, Record
+    from astrbot.api.message_components import File, Image, Plain, Record, Video
 except ImportError:
-    Plain = Image = Record = File = None
+    Plain = Image = Record = File = Video = None
 
 
 class InputMessageConverter:
     """输入消息转换器 - 将 Live2D 客户端的消息转换为 AstrBot 消息对象"""
 
-    def __init__(self, temp_dir: str | None = None, resource_manager: Any | None = None):
+    _TEMP_FILE_PREFIXES = (
+        "live2d_img_",
+        "live2d_voice_",
+        "live2d_file_",
+        "live2d_video_",
+    )
+
+    def __init__(
+        self,
+        temp_dir: str | None = None,
+        *,
+        temp_ttl_seconds: int | None = None,
+        temp_max_total_bytes: int | None = None,
+        temp_max_files: int | None = None,
+        resource_manager: Any | None = None,
+    ):
         """
         初始化转换器
 
         Args:
             temp_dir: 临时文件目录，用于存储 Base64 图片
+            temp_ttl_seconds: Temporary file TTL in seconds. Set to 0/None to disable.
+            temp_max_total_bytes: Total temp size quota in bytes. Set to 0/None to disable.
+            temp_max_files: Max number of temp files. Set to 0/None to disable.
             resource_manager: 资源管理器（处理 rid 引用）
         """
         self.temp_dir = temp_dir or tempfile.gettempdir()
         Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
+        self.temp_ttl_seconds = int(temp_ttl_seconds or 0) or None
+        self.temp_max_total_bytes = int(temp_max_total_bytes or 0) or None
+        self.temp_max_files = int(temp_max_files or 0) or None
         self.resource_manager = resource_manager
 
     def convert(self, content: list[dict[str, Any]]) -> tuple[list, str]:
@@ -56,12 +78,19 @@ class InputMessageConverter:
                     message_components.append(image_comp)
                     text_parts.append("[图片]")
 
-            elif item_type == "voice":
+            elif item_type in {"voice", "audio", "record"}:
                 voice_comp, voice_text = self._convert_voice(item)
                 if voice_comp:
                     message_components.append(voice_comp)
                 if voice_text:
                     text_parts.append(voice_text)
+
+            elif item_type == "video":
+                video_comp, video_text = self._convert_video(item)
+                if video_comp:
+                    message_components.append(video_comp)
+                if video_text:
+                    text_parts.append(video_text)
 
             elif item_type == "file":
                 file_comp, file_text = self._convert_file(item)
@@ -86,6 +115,108 @@ class InputMessageConverter:
             # Some mock components in standalone mode may be immutable.
             pass
         return comp
+
+    def cleanup_temp_files(
+        self, *, reserve_bytes: int = 0, reserve_files: int = 0
+    ) -> dict[str, int]:
+        """Cleanup temp files created by this adapter.
+
+        Reserve params are used when writing a new temp file, ensuring enough room
+        after cleanup.
+        """
+        removed = 0
+        removed_bytes = 0
+
+        if (
+            self.temp_max_total_bytes is not None
+            and reserve_bytes > self.temp_max_total_bytes
+        ):
+            raise ValueError("Temp quota too small for the incoming payload.")
+        if self.temp_max_files is not None and reserve_files > self.temp_max_files:
+            raise ValueError("Temp file quota too small for the incoming payload.")
+
+        temp_root = Path(self.temp_dir)
+        if not temp_root.exists():
+            return {"removed": 0, "removed_bytes": 0}
+
+        def is_owned(p: Path) -> bool:
+            name = p.name
+            return any(name.startswith(prefix) for prefix in self._TEMP_FILE_PREFIXES)
+
+        files: list[Path] = []
+        for p in temp_root.iterdir():
+            if not p.is_file():
+                continue
+            if is_owned(p):
+                files.append(p)
+
+        # TTL cleanup (based on mtime)
+        if self.temp_ttl_seconds:
+            now = time.time()
+            for p in list(files):
+                try:
+                    mtime = p.stat().st_mtime
+                    if (now - mtime) > self.temp_ttl_seconds:
+                        size = p.stat().st_size
+                        p.unlink(missing_ok=True)
+                        removed += 1
+                        removed_bytes += size
+                        files.remove(p)
+                except OSError:
+                    continue
+
+        # Quota cleanup
+        max_files = (
+            max(self.temp_max_files - reserve_files, 0)
+            if self.temp_max_files is not None
+            else None
+        )
+        max_bytes = (
+            max(self.temp_max_total_bytes - reserve_bytes, 0)
+            if self.temp_max_total_bytes is not None
+            else None
+        )
+
+        def safe_mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        files.sort(key=safe_mtime)
+
+        def total_bytes() -> int:
+            total = 0
+            for p in files:
+                try:
+                    total += p.stat().st_size
+                except OSError:
+                    continue
+            return total
+
+        if max_files is not None:
+            while len(files) > max_files:
+                p = files.pop(0)
+                try:
+                    size = p.stat().st_size
+                    p.unlink(missing_ok=True)
+                    removed += 1
+                    removed_bytes += size
+                except OSError:
+                    continue
+
+        if max_bytes is not None:
+            while files and total_bytes() > max_bytes:
+                p = files.pop(0)
+                try:
+                    size = p.stat().st_size
+                    p.unlink(missing_ok=True)
+                    removed += 1
+                    removed_bytes += size
+                except OSError:
+                    continue
+
+        return {"removed": removed, "removed_bytes": removed_bytes}
 
     def _convert_image(self, item: dict[str, Any]) -> Any | None:
         """转换图片消息"""
@@ -118,6 +249,15 @@ class InputMessageConverter:
                 if match:
                     image_format, base64_data = match.groups()
                     image_bytes = base64.b64decode(base64_data)
+
+                    try:
+                        self.cleanup_temp_files(
+                            reserve_bytes=len(image_bytes),
+                            reserve_files=1,
+                        )
+                    except Exception as e:
+                        print(f"[错误] 清理临时文件失败: {e}")
+                        return None
 
                     # 保存到临时文件
                     temp_file = os.path.join(
@@ -202,6 +342,15 @@ class InputMessageConverter:
 
                     audio_bytes = base64.b64decode(base64_data)
 
+                    try:
+                        self.cleanup_temp_files(
+                            reserve_bytes=len(audio_bytes),
+                            reserve_files=1,
+                        )
+                    except Exception as e:
+                        print(f"[错误] 清理临时文件失败: {e}")
+                        return None, None
+
                     # 保存到临时文件
                     temp_file = os.path.join(
                         self.temp_dir,
@@ -210,7 +359,9 @@ class InputMessageConverter:
                     with open(temp_file, "wb") as f:
                         f.write(audio_bytes)
 
-                    print(f"[信息] 已保存语音文件: {temp_file}, 格式: {audio_format_raw}")
+                    print(
+                        f"[信息] 已保存语音文件: {temp_file}, 格式: {audio_format_raw}"
+                    )
                     rec = Record.fromFileSystem(temp_file)
                     rec = self._set_component_url(rec, os.path.abspath(temp_file))
                     return rec, "[语音]"
@@ -264,6 +415,15 @@ class InputMessageConverter:
                     return None, None
                 file_bytes = base64.b64decode(b64_data)
 
+                try:
+                    self.cleanup_temp_files(
+                        reserve_bytes=len(file_bytes),
+                        reserve_files=1,
+                    )
+                except Exception as e:
+                    print(f"[错误] 清理临时文件失败: {e}")
+                    return None, None
+
                 suffix = ""
                 try:
                     import mimetypes
@@ -290,8 +450,80 @@ class InputMessageConverter:
         if url:
             if url.startswith("file:///"):
                 local_path = url[8:] if os.name == "nt" else url[7:]
-                return File(name=str(name), file=os.path.abspath(local_path)), f"[文件] {name}"
+                return File(
+                    name=str(name), file=os.path.abspath(local_path)
+                ), f"[文件] {name}"
             if url.startswith("http://") or url.startswith("https://"):
                 return File(name=str(name), url=url), f"[文件] {name}"
+
+        return None, None
+
+    def _convert_video(self, item: dict[str, Any]) -> tuple[Any | None, str | None]:
+        """转换视频消息，返回 (组件, 文本)"""
+        if not Video:
+            return None, None
+
+        url = item.get("url")
+        data = item.get("data")
+        inline = item.get("inline")
+        rid = item.get("rid")
+
+        if inline and not data:
+            data = inline
+
+        if rid and self.resource_manager:
+            resource_path = self.resource_manager.get_resource_path(rid)
+            if resource_path and resource_path.exists():
+                return (
+                    Video.fromFileSystem(str(resource_path)),
+                    "[视频]",
+                )
+            resource_payload = self.resource_manager.get_resource_payload(rid)
+            if resource_payload and resource_payload.get("url"):
+                return Video.fromURL(str(resource_payload["url"])), "[视频]"
+
+        if data and isinstance(data, str) and data.startswith("data:video/"):
+            try:
+                match = re.match(r"data:video/([^;,]+)(?:[^,]*)?;base64,(.+)", data)
+                if match:
+                    video_format_raw = match.group(1)
+                    base64_data = match.group(2)
+
+                    format_map = {
+                        "mp4": "mp4",
+                        "webm": "webm",
+                        "ogg": "ogv",
+                        "quicktime": "mov",
+                    }
+                    video_ext = format_map.get(
+                        video_format_raw.lower(), video_format_raw.lower()
+                    )
+
+                    video_bytes = base64.b64decode(base64_data)
+                    try:
+                        self.cleanup_temp_files(
+                            reserve_bytes=len(video_bytes),
+                            reserve_files=1,
+                        )
+                    except Exception as e:
+                        print(f"[错误] 清理临时文件失败: {e}")
+                        return None, None
+                    temp_file = os.path.join(
+                        self.temp_dir,
+                        f"live2d_video_{os.urandom(8).hex()}.{video_ext}",
+                    )
+                    with open(temp_file, "wb") as f:
+                        f.write(video_bytes)
+                    return Video.fromFileSystem(temp_file), "[视频]"
+            except Exception as e:
+                print(f"[错误] 解析 Base64 视频失败: {e}")
+                return None, None
+
+        if url:
+            if url.startswith("file:///"):
+                local_path = url[8:] if os.name == "nt" else url[7:]
+                return Video.fromFileSystem(os.path.abspath(local_path)), "[视频]"
+            if url.startswith("http://") or url.startswith("https://"):
+                return Video.fromURL(url), "[视频]"
 
         return None, None

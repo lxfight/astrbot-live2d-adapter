@@ -6,17 +6,20 @@ from typing import Any
 try:
     from astrbot import logger
     from astrbot.api.event import AstrMessageEvent, MessageChain
-    from astrbot.api.message_components import Image, Plain
-except ImportError:
-    # 兼容性处理（用于独立测试）
-    AstrMessageEvent = object
-    MessageChain = Plain = Image = None
-    import logging
-
-    logger = logging.getLogger(__name__)
+    from astrbot.api.message_components import BaseMessageComponent, Plain
+except Exception as e:  # pragma: no cover
+    raise ImportError(
+        f"Failed to import AstrBot runtime modules; this adapter must run inside AstrBot: {e}"
+    )
 
 from ..converters.output_converter import OutputMessageConverter
-from ..core.protocol import BasePacket, Protocol
+from ..core.motion_types import infer_motion_type_from_message
+from ..core.protocol import (
+    BasePacket,
+    Protocol,
+    create_expression_element,
+    create_motion_element,
+)
 
 
 class Live2DMessageEvent(AstrMessageEvent):
@@ -59,6 +62,9 @@ class Live2DMessageEvent(AstrMessageEvent):
             resource_manager=self.resource_manager,
         )
 
+    def _empty_chain(self) -> MessageChain:
+        return MessageChain()
+
     async def send(self, message: MessageChain | None) -> None:
         """
         发送消息到 Live2D 客户端
@@ -68,7 +74,7 @@ class Live2DMessageEvent(AstrMessageEvent):
         """
         if not message or not message.chain:
             logger.warning("[Live2D] 消息链为空，跳过发送")
-            await super().send(MessageChain([]))
+            await super().send(self._empty_chain())
             return
 
         try:
@@ -80,7 +86,7 @@ class Live2DMessageEvent(AstrMessageEvent):
 
             if not sequence:
                 logger.warning("[Live2D] 转换后的表演序列为空")
-                await super().send(MessageChain([]))
+                await super().send(self._empty_chain())
                 return
 
             # 创建 perform.show 数据包
@@ -100,7 +106,7 @@ class Live2DMessageEvent(AstrMessageEvent):
             logger.error(f"[Live2D] 发送消息失败: {e}", exc_info=True)
 
         # 调用父类方法（用于统计等）
-        await super().send(MessageChain([]))
+        await super().send(self._empty_chain())
 
     async def send_streaming(
         self, generator: AsyncGenerator[MessageChain, None], use_fallback: bool = False
@@ -110,30 +116,25 @@ class Live2DMessageEvent(AstrMessageEvent):
 
         Args:
             generator: 消息链生成器
-            use_fallback: 是否使用降级方案（未实现）
+            use_fallback: Whether to force fallback (send after buffering all chunks).
         """
         enable_streaming = self.config.get("enable_streaming", True)
 
-        if not enable_streaming:
-            # 禁用流式输出，等待所有内容后一次性发送
-            full_text = ""
-            final_chain = None
-
+        if use_fallback or not enable_streaming:
+            full_components: list[BaseMessageComponent] = []
             async for chain in generator:
                 if chain and chain.chain:
-                    for comp in chain.chain:
-                        if isinstance(comp, Plain):
-                            full_text += comp.text
-                    final_chain = chain
-
-            if full_text and final_chain:
-                await self.send(MessageChain([Plain(full_text)]))
+                    full_components.extend(chain.chain)
+            if full_components:
+                await self.send(MessageChain(chain=full_components))
+            else:
+                await self.send(self._empty_chain())
+            await super().send_streaming(generator, use_fallback)
             return
 
         # 流式输出：逐块发送
         try:
             buffer = ""
-            tts_url = self.get_extra("tts_url")
 
             async for chain in generator:
                 if not chain or not chain.chain:
@@ -162,32 +163,19 @@ class Live2DMessageEvent(AstrMessageEvent):
             if buffer:
                 sequence = self.output_converter.convert_streaming(buffer)
                 if sequence:
-                    # 最后一块添加情感动作
                     if self.output_converter.enable_auto_emotion:
-                        try:
-                            from ..converters.emotion_analyzer import EmotionAnalyzer
-                            from ..core.protocol import (
-                                create_expression_element,
-                                create_motion_element,
-                            )
+                        motion_type = infer_motion_type_from_message(buffer)
+                        expression_element = create_expression_element(
+                            expression_id="", fade=300
+                        )
+                        expression_element["motionType"] = motion_type
+                        sequence.append(expression_element)
 
-                            expression, motion = EmotionAnalyzer.analyze(buffer)
-                            if expression:
-                                sequence.append(
-                                    create_expression_element(expression, fade=300)
-                                )
-                            if motion:
-                                sequence.append(
-                                    create_motion_element(
-                                        group=motion.get("group", "Idle"),
-                                        index=motion.get("index", 0),
-                                        priority=2,
-                                    )
-                                )
-                        except Exception as e:
-                            logger.debug(
-                                f"[Live2D] Streaming emotion analyze failed: {e!s}"
-                            )
+                        motion_element = create_motion_element(
+                            group="Idle", index=0, priority=2
+                        )
+                        motion_element["motionType"] = motion_type
+                        sequence.append(motion_element)
 
                     packet = Protocol.create_perform_show(
                         sequence=sequence, interrupt=False

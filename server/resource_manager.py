@@ -37,6 +37,10 @@ class ResourceManager:
         resource_path: str = "/resources",
         max_inline_bytes: int = 262144,
         token: str | None = None,
+        *,
+        ttl_ms: int | None = None,
+        max_total_bytes: int | None = None,
+        max_total_files: int | None = None,
     ):
         self.storage_dir = Path(storage_dir).resolve()
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -44,6 +48,9 @@ class ResourceManager:
         self.resource_path = "/" + resource_path.strip("/")
         self.max_inline_bytes = max_inline_bytes
         self.token = token or None
+        self.ttl_ms = int(ttl_ms or 0) or None
+        self.max_total_bytes = int(max_total_bytes or 0) or None
+        self.max_total_files = int(max_total_files or 0) or None
         self.resources: dict[str, ResourceEntry] = {}
 
     def _now(self) -> int:
@@ -75,9 +82,103 @@ class ResourceManager:
             return f"{base}?token={quote(self.token)}"
         return base
 
+    def cleanup(
+        self, *, reserve_bytes: int = 0, reserve_files: int = 0
+    ) -> dict[str, int]:
+        """Cleanup resource files by TTL and quota.
+
+        The cleanup is based on filesystem mtime so it also works across restarts.
+        Reserve params are used when storing a new resource (make room first).
+        """
+        removed = 0
+        removed_bytes = 0
+
+        if self.max_total_bytes is not None and reserve_bytes > self.max_total_bytes:
+            raise ValueError("Resource quota too small for the incoming payload.")
+        if self.max_total_files is not None and reserve_files > self.max_total_files:
+            raise ValueError("Resource file quota too small for the incoming payload.")
+
+        # Drop stale metadata entries whose files are missing.
+        for rid, entry in list(self.resources.items()):
+            if entry.path and entry.status == "ready" and not entry.path.exists():
+                self.resources.pop(rid, None)
+
+        files: list[tuple[float, int, Path]] = []
+        for p in self.storage_dir.iterdir():
+            if not p.is_file():
+                continue
+            try:
+                stat = p.stat()
+            except OSError:
+                continue
+            files.append((stat.st_mtime, stat.st_size, p))
+
+        files.sort(key=lambda x: x[0])
+
+        now_ms = self._now()
+        if self.ttl_ms:
+            kept: list[tuple[float, int, Path]] = []
+            for mtime, size, path in files:
+                age_ms = now_ms - int(mtime * 1000)
+                if age_ms <= self.ttl_ms:
+                    kept.append((mtime, size, path))
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                    removed_bytes += size
+                except OSError:
+                    kept.append((mtime, size, path))
+                    continue
+                self.resources.pop(path.stem, None)
+            files = kept
+
+        max_files = (
+            max(self.max_total_files - reserve_files, 0)
+            if self.max_total_files is not None
+            else None
+        )
+        max_bytes = (
+            max(self.max_total_bytes - reserve_bytes, 0)
+            if self.max_total_bytes is not None
+            else None
+        )
+
+        def total_bytes() -> int:
+            return sum(size for _, size, _ in files)
+
+        if max_files is not None:
+            while len(files) > max_files:
+                mtime, size, path = files.pop(0)
+                try:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                    removed_bytes += size
+                except OSError:
+                    files.append((mtime, size, path))
+                    files.sort(key=lambda x: x[0])
+                    break
+                self.resources.pop(path.stem, None)
+
+        if max_bytes is not None:
+            while files and total_bytes() > max_bytes:
+                mtime, size, path = files.pop(0)
+                try:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                    removed_bytes += size
+                except OSError:
+                    files.append((mtime, size, path))
+                    files.sort(key=lambda x: x[0])
+                    break
+                self.resources.pop(path.stem, None)
+
+        return {"removed": removed, "removed_bytes": removed_bytes}
+
     def prepare_upload(
         self, kind: str, mime: str, size: int = 0, sha256: str | None = None
     ) -> ResourceEntry:
+        self.cleanup(reserve_bytes=max(size, 0), reserve_files=1)
         rid = self._generate_id()
         filename = self._resource_filename(rid, mime)
         path = self.storage_dir / filename
@@ -110,17 +211,25 @@ class ResourceManager:
         if not path.exists():
             raise FileNotFoundError(file_path)
         mime = mime or self._guess_mime(file_path)
-        data = path.read_bytes()
+        size = path.stat().st_size
+        self.cleanup(reserve_bytes=size, reserve_files=1)
         rid = self._generate_id()
         filename = self._resource_filename(rid, mime)
         target = self.storage_dir / filename
-        target.write_bytes(data)
+        sha = hashlib.sha256()
+        with path.open("rb") as src, target.open("wb") as dst:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                sha.update(chunk)
+                dst.write(chunk)
         entry = ResourceEntry(
             rid=rid,
             kind=kind,
             mime=mime,
-            size=len(data),
-            sha256=self._calc_sha256(data),
+            size=size,
+            sha256=sha.hexdigest(),
             path=target,
             status="ready",
             created_at=self._now(),
@@ -128,9 +237,7 @@ class ResourceManager:
         self.resources[rid] = entry
         return entry
 
-    def build_reference_from_file(
-        self, file_path: str, kind: str
-    ) -> dict[str, Any]:
+    def build_reference_from_file(self, file_path: str, kind: str) -> dict[str, Any]:
         path = Path(file_path)
         mime = self._guess_mime(file_path)
         size = path.stat().st_size
@@ -161,6 +268,7 @@ class ResourceManager:
                 "size": len(data),
                 "sha256": self._calc_sha256(data),
             }
+        self.cleanup(reserve_bytes=len(data), reserve_files=1)
         rid = self._generate_id()
         filename = self._resource_filename(rid, mime)
         target = self.storage_dir / filename

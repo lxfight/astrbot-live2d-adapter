@@ -56,6 +56,14 @@ from .message_event import Live2DMessageEvent
         "resource_base_url": "",
         "resource_token": "",
         "resource_max_inline_bytes": 262144,
+        "resource_ttl_seconds": 604800,
+        "resource_max_total_bytes": 1073741824,
+        "resource_max_files": 2000,
+        "temp_dir": "./data/live2d_temp",
+        "temp_ttl_seconds": 21600,
+        "temp_max_total_bytes": 268435456,
+        "temp_max_files": 5000,
+        "cleanup_interval_seconds": 600,
     },
     adapter_display_name="Live2D",
     support_streaming_message=True,
@@ -86,19 +94,33 @@ class Live2DPlatformAdapter(Platform):
         self.resource_server: ResourceServer | None = None
 
         self._stop_event = asyncio.Event()
+        self._cleanup_task: asyncio.Task | None = None
 
         self.resource_manager: ResourceManager | None = None
         if self.config_obj.resource_enabled:
+            resource_ttl_seconds = int(
+                platform_config.get("resource_ttl_seconds", 0) or 0
+            )
+            resource_ttl_ms = (
+                resource_ttl_seconds * 1000 if resource_ttl_seconds > 0 else None
+            )
             self.resource_manager = ResourceManager(
                 storage_dir=self.config_obj.resource_dir,
                 base_url=self.config_obj.resource_base_url,
                 resource_path=self.config_obj.resource_path,
                 max_inline_bytes=self.config_obj.resource_max_inline_bytes,
                 token=self.config_obj.resource_token,
+                ttl_ms=resource_ttl_ms,
+                max_total_bytes=platform_config.get("resource_max_total_bytes"),
+                max_total_files=platform_config.get("resource_max_files"),
             )
 
         # 消息转换器
         self.input_converter = InputMessageConverter(
+            temp_dir=platform_config.get("temp_dir"),
+            temp_ttl_seconds=platform_config.get("temp_ttl_seconds"),
+            temp_max_total_bytes=platform_config.get("temp_max_total_bytes"),
+            temp_max_files=platform_config.get("temp_max_files"),
             resource_manager=self.resource_manager,
         )
         self.output_converter = OutputMessageConverter(
@@ -219,9 +241,7 @@ class Live2DPlatformAdapter(Platform):
         ws_server = self.ws_server
         if not ws_server:
             return {}
-        return ws_server.handler.client_states.get(client_id, {}).get(
-            "session", {}
-        )
+        return ws_server.handler.client_states.get(client_id, {}).get("session", {})
 
     def _resolve_message_type(self, metadata: dict) -> MessageType:
         raw_type = metadata.get("messageType") or metadata.get("type")
@@ -235,7 +255,11 @@ class Live2DPlatformAdapter(Platform):
                 return MessageType.FRIEND_MESSAGE
             if normalized in {"other", "system", "other_message"}:
                 return MessageType.OTHER_MESSAGE
-        if metadata.get("groupId") or metadata.get("group_id") or metadata.get("isGroup"):
+        if (
+            metadata.get("groupId")
+            or metadata.get("group_id")
+            or metadata.get("isGroup")
+        ):
             return MessageType.GROUP_MESSAGE
         return MessageType.FRIEND_MESSAGE
 
@@ -491,7 +515,7 @@ class Live2DPlatformAdapter(Platform):
             await self.ws_server.start()
 
             # 启动资源服务器
-            if self.config_obj.resource_enabled:
+            if self.resource_manager is not None:
                 self.resource_server = ResourceServer(
                     manager=self.resource_manager,
                     host=self.config_obj.resource_host,
@@ -500,6 +524,9 @@ class Live2DPlatformAdapter(Platform):
                     token=self.config_obj.resource_token,
                 )
                 await self.resource_server.start()
+
+            # Background cleanup task (resources + temp files)
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
 
             logger.info("[Live2D] 平台适配器启动成功")
             logger.info(
@@ -533,27 +560,72 @@ class Live2DPlatformAdapter(Platform):
 
             if packet.op == Protocol.OP_INPUT_TOUCH:
                 abm = self.convert_touch(packet, client_id)
-                await self.handle_msg(
-                    abm, client_id, extras={"live2d_op": packet.op}
-                )
+                await self.handle_msg(abm, client_id, extras={"live2d_op": packet.op})
                 return
 
             if packet.op == Protocol.OP_INPUT_SHORTCUT:
                 abm = self.convert_shortcut(packet, client_id)
-                await self.handle_msg(
-                    abm, client_id, extras={"live2d_op": packet.op}
-                )
+                await self.handle_msg(abm, client_id, extras={"live2d_op": packet.op})
                 return
 
             logger.debug(f"[Live2D] 未处理的消息类型: {packet.op}")
 
         ws_server.handler.on_message_received = on_message_received
 
+    def _run_cleanup(self) -> None:
+        """Best-effort cleanup for disk resources and temp files."""
+        if self.resource_manager:
+            try:
+                stats = self.resource_manager.cleanup()
+                if stats.get("removed"):
+                    logger.debug(
+                        "[Live2D] Resource cleanup: removed=%s bytes=%s",
+                        stats.get("removed"),
+                        stats.get("removed_bytes"),
+                    )
+            except Exception as e:
+                logger.debug(f"[Live2D] Resource cleanup failed: {e!s}")
+
+        try:
+            stats = self.input_converter.cleanup_temp_files()
+            if stats.get("removed"):
+                logger.debug(
+                    "[Live2D] Temp cleanup: removed=%s bytes=%s",
+                    stats.get("removed"),
+                    stats.get("removed_bytes"),
+                )
+        except Exception as e:
+            logger.debug(f"[Live2D] Temp cleanup failed: {e!s}")
+
+    async def _cleanup_loop(self) -> None:
+        interval = int(self.platform_config.get("cleanup_interval_seconds", 600) or 600)
+        if interval < 10:
+            interval = 10
+
+        self._run_cleanup()
+
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+            if self._stop_event.is_set():
+                break
+            self._run_cleanup()
+
     async def terminate(self):
         """终止平台适配器运行"""
         try:
             logger.info("[Live2D] 正在停止平台适配器...")
             self._stop_event.set()
+
+            if self._cleanup_task:
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                self._cleanup_task = None
 
             if self.ws_server:
                 await self.ws_server.stop()

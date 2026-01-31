@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+
 from aiohttp import web
 
 try:
@@ -50,6 +52,8 @@ class ResourceServer:
         if not self._check_auth(request):
             return web.Response(status=401, text="Unauthorized")
         rid = request.match_info.get("rid")
+        if not rid:
+            return web.Response(status=400, text="Missing rid")
         entry = self.manager.get_resource(rid)
         if not entry or not entry.path or not entry.path.exists():
             return web.Response(status=404, text="Not Found")
@@ -59,19 +63,56 @@ class ResourceServer:
         if not self._check_auth(request):
             return web.Response(status=401, text="Unauthorized")
         rid = request.match_info.get("rid")
+        if not rid:
+            return web.Response(status=400, text="Missing rid")
         entry = self.manager.get_resource(rid)
         if not entry or not entry.path:
             return web.Response(status=404, text="Not Found")
-        data = await request.read()
-        entry.path.write_bytes(data)
-        entry.size = len(data)
+        expected = request.content_length
+        if expected is not None:
+            try:
+                self.manager.cleanup(reserve_bytes=int(expected), reserve_files=0)
+            except ValueError as e:
+                return web.Response(status=413, text=str(e))
+
+        sha = hashlib.sha256()
+        size = 0
+        try:
+            with entry.path.open("wb") as f:
+                async for chunk in request.content.iter_chunked(1024 * 1024):
+                    size += len(chunk)
+                    sha.update(chunk)
+                    f.write(chunk)
+        except Exception as e:
+            entry.status = "error"
+            return web.Response(status=500, text=f"Write failed: {e!s}")
+
+        digest = sha.hexdigest()
+        if entry.sha256 and entry.sha256 != digest:
+            entry.status = "error"
+            try:
+                entry.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return web.Response(status=400, text="SHA256 mismatch")
+
+        entry.sha256 = digest
+        entry.size = size
         entry.status = "ready"
-        return web.json_response({"rid": rid, "size": entry.size})
+        self.manager.commit_upload(rid, size=size)
+        try:
+            self.manager.cleanup()
+        except Exception:
+            pass
+
+        return web.json_response({"rid": rid, "size": entry.size, "sha256": digest})
 
     async def handle_delete(self, request: web.Request) -> web.StreamResponse:
         if not self._check_auth(request):
             return web.Response(status=401, text="Unauthorized")
         rid = request.match_info.get("rid")
+        if not rid:
+            return web.Response(status=400, text="Missing rid")
         if not self.manager.release(rid):
             return web.Response(status=404, text="Not Found")
         return web.json_response({"rid": rid, "released": True})
