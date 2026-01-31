@@ -164,24 +164,29 @@ class Live2DMessageEvent(AstrMessageEvent):
                 if sequence:
                     # 最后一块添加情感动作
                     if self.output_converter.enable_auto_emotion:
-                        from converters.emotion_analyzer import EmotionAnalyzer
-                        from core.protocol import (
-                            create_expression_element,
-                            create_motion_element,
-                        )
-
-                        expression, motion = EmotionAnalyzer.analyze(buffer)
-                        if expression:
-                            sequence.append(
-                                create_expression_element(expression, fade=300)
+                        try:
+                            from ..converters.emotion_analyzer import EmotionAnalyzer
+                            from ..core.protocol import (
+                                create_expression_element,
+                                create_motion_element,
                             )
-                        if motion:
-                            sequence.append(
-                                create_motion_element(
-                                    group=motion.get("group", "Idle"),
-                                    index=motion.get("index", 0),
-                                    priority=2,
+
+                            expression, motion = EmotionAnalyzer.analyze(buffer)
+                            if expression:
+                                sequence.append(
+                                    create_expression_element(expression, fade=300)
                                 )
+                            if motion:
+                                sequence.append(
+                                    create_motion_element(
+                                        group=motion.get("group", "Idle"),
+                                        index=motion.get("index", 0),
+                                        priority=2,
+                                    )
+                                )
+                        except Exception as e:
+                            logger.debug(
+                                f"[Live2D] Streaming emotion analyze failed: {e!s}"
                             )
 
                     packet = Protocol.create_perform_show(
@@ -209,9 +214,11 @@ class Live2DMessageEvent(AstrMessageEvent):
             return
 
         try:
-            # 调用 WebSocket 服务器的广播方法
-            # （由于单一连接约束，广播实际上只会发送给唯一的客户端）
-            await self.websocket_server.broadcast(packet)
+            if getattr(self.websocket_server, "send_to", None):
+                await self.websocket_server.send_to(self.client_id, packet)
+            else:
+                # Fallback to broadcast for older server versions.
+                await self.websocket_server.broadcast(packet)
         except Exception as e:
             logger.error(f"[Live2D] 发送数据包到客户端失败: {e}", exc_info=True)
 

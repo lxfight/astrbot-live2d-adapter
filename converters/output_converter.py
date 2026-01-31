@@ -144,6 +144,13 @@ class OutputMessageConverter:
                 audio_element = self._build_audio_element(component)
                 if audio_element:
                     sequence.append(audio_element)
+
+            elif File and isinstance(component, File):
+                file_element = self._build_file_text_element(component)
+                if file_element:
+                    sequence.append(file_element)
+                    file_name = getattr(component, "name", "") or "file"
+                    full_text += f"[文件:{file_name}]"
             else:
                 fallback_text = self._format_component_text(component)
                 if fallback_text:
@@ -253,6 +260,33 @@ class OutputMessageConverter:
             inline=resource_ref.get("inline"),
             tts_mode="remote",
         )
+
+    def _build_file_text_element(self, file: Any) -> dict[str, Any] | None:
+        name = getattr(file, "name", "") or "file"
+        file_path = getattr(file, "file_", "") or ""
+        file_url = getattr(file, "url", "") or ""
+
+        source = file_url or file_path
+        if not source:
+            return create_text_element(content=f"[file] {name}", duration=0, position="center")
+
+        ref = self._build_resource_element(source, "file")
+        if not ref:
+            return create_text_element(content=f"[file] {name}", duration=0, position="center")
+
+        if ref.get("url"):
+            return create_text_element(
+                content=f"[file] {name}: {ref.get('url')}",
+                duration=0,
+                position="center",
+            )
+        if ref.get("rid"):
+            return create_text_element(
+                content=f"[file] {name}: rid={ref.get('rid')}",
+                duration=0,
+                position="center",
+            )
+        return create_text_element(content=f"[file] {name}", duration=0, position="center")
 
     def _build_tts_element(self, text: str, url: str) -> dict[str, Any] | None:
         resource_ref = self._build_resource_element(url, "audio")

@@ -13,15 +13,17 @@ else:
     MessageChainType = object
 
 try:
+    from astrbot.api import logger as _astr_logger
     from astrbot.api.event import MessageChain
     from astrbot.api.message_components import Plain
 except ImportError:
+    _astr_logger = None
     MessageChain = None
     Plain = None
 
 from ..core.protocol import Protocol, create_motion_element, create_text_element
 
-logger = logging.getLogger(__name__)
+logger = _astr_logger or logging.getLogger(__name__)
 
 
 class Live2DCommands:
@@ -89,7 +91,7 @@ class Live2DCommands:
   - 自动情感: {"✅" if self.adapter.platform_config.get("enable_auto_emotion") else "❌"}
   - TTS: {"✅" if self.adapter.platform_config.get("enable_tts") else "❌"}
   - TTS 模式: {self.adapter.platform_config.get("tts_mode", "local")}
-  - 流式输出: {"✅" if self.adapter.platform_config.get("enable_streaming") else "❌"}
+  - 流式输出: {"✅" if self.adapter.platform_config.get("enable_streaming", True) else "❌"}
 """
 
             return self._make_chain(status_text)

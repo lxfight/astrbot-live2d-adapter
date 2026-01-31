@@ -180,8 +180,6 @@ class Protocol:
                 "state.ready",
                 "state.playing",
                 "state.config",
-                "model.*",
-                "desktop.*",
             ]
         if config is None:
             config = {

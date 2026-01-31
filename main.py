@@ -1,15 +1,12 @@
 """AstrBot Live2D Adapter - AstrBot 插件入口"""
 
-import logging
-
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star, register
 
 from .adapters.platform_adapter import Live2DPlatformAdapter
 from .commands.live2d_commands import Live2DCommands
-
-logger = logging.getLogger(__name__)
 
 
 @register(
@@ -43,7 +40,7 @@ class Live2DAdapterPlugin(Star):
         logger.info("[Live2D] 插件已加载")
         logger.info("[Live2D] 平台适配器将在 AstrBot 启动平台时自动启动")
         logger.info(
-            "[Live2D] 可用指令: /live2d status, /live2d reload, /live2d say <text>"
+            "[Live2D] 可用指令: /live2d status, /live2d reload, /live2d say <text>, /live2d interrupt"
         )
 
     @filter.command_group("live2d")
@@ -108,6 +105,24 @@ class Live2DAdapterPlugin(Star):
                 await event.send(result)
         except Exception as e:
             logger.error(f"[Live2D] say 指令执行失败: {e}", exc_info=True)
+            await event.send(MessageChain([Plain(f"[Live2D] 执行失败: {e}")]))
+
+    @live2d.command("interrupt")
+    async def live2d_interrupt(self, event: AstrMessageEvent):
+        """Interrupt current Live2D performing."""
+        try:
+            if not self.commands_handler:
+                adapter = self._get_live2d_adapter()
+                if not adapter:
+                    await event.send(MessageChain([Plain("[Live2D] 适配器未启动")]))
+                    return
+                self.commands_handler = Live2DCommands(adapter)
+
+            result = await self.commands_handler.handle_command("interrupt", [])
+            if result:
+                await event.send(result)
+        except Exception as e:
+            logger.error(f"[Live2D] interrupt 指令执行失败: {e}", exc_info=True)
             await event.send(MessageChain([Plain(f"[Live2D] 执行失败: {e}")]))
 
     def _get_live2d_adapter(self) -> Live2DPlatformAdapter | None:

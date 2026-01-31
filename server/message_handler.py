@@ -3,10 +3,15 @@
 import logging
 from collections.abc import Callable
 
+try:
+    from astrbot.api import logger as _astr_logger
+except Exception:
+    _astr_logger = None
+
 from ..core.config import ConfigLike
 from ..core.protocol import BasePacket, Protocol
 
-logger = logging.getLogger(__name__)
+logger = _astr_logger or logging.getLogger(__name__)
 
 
 class MessageHandler:
@@ -114,15 +119,39 @@ class MessageHandler:
         capabilities = payload.get("capabilities") or []
         if capabilities:
             logger.info(f"客户端声明能力: {capabilities}")
+
+        server_capabilities = [
+            "input.message",
+            "input.touch",
+            "input.shortcut",
+            "perform.show",
+            "perform.interrupt",
+            "state.ready",
+            "state.playing",
+            "state.config",
+        ]
+        if self.resource_manager:
+            server_capabilities.extend(
+                [
+                    "resource.prepare",
+                    "resource.commit",
+                    "resource.get",
+                    "resource.release",
+                    "resource.progress",
+                ]
+            )
         return Protocol.create_handshake_ack(
             request_id=packet.id,
             session_id=session_id,
             user_id=user_id,
+            capabilities=server_capabilities,
             config={
                 "maxMessageLength": 5000,
                 "supportedImageFormats": ["jpg", "png", "gif", "webp"],
                 "supportedAudioFormats": ["mp3", "wav", "ogg"],
-                "maxInlineBytes": getattr(self.config, "resource_max_inline_bytes", 262144),
+                "maxInlineBytes": getattr(
+                    self.config, "resource_max_inline_bytes", 262144
+                ),
                 "resourceBaseUrl": getattr(self.config, "resource_base_url", ""),
             },
         )

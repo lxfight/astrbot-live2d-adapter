@@ -8,11 +8,16 @@ from typing import Any
 
 import websockets
 
+try:
+    from astrbot.api import logger as _astr_logger
+except Exception:
+    _astr_logger = None
+
 from ..core.config import ConfigLike
 from ..core.protocol import BasePacket, Protocol
 from .message_handler import MessageHandler
 
-logger = logging.getLogger(__name__)
+logger = _astr_logger or logging.getLogger(__name__)
 
 
 class WebSocketServer:
@@ -23,6 +28,8 @@ class WebSocketServer:
         self.handler = MessageHandler(config, resource_manager=resource_manager)
         self.clients: dict[str, Any] = {}
         self.server = None
+        self.on_client_connected = None
+        self.on_client_disconnected = None
 
     async def register(self, websocket, client_id: str):
         """注册客户端连接"""
@@ -42,6 +49,12 @@ class WebSocketServer:
 
         self.clients[client_id] = websocket
         logger.info(f"客户端已连接: {client_id} (总数: {len(self.clients)})")
+
+        if self.on_client_connected:
+            try:
+                await self.on_client_connected(client_id)
+            except Exception as e:
+                logger.warning(f"on_client_connected callback failed: {e!s}")
         return True
 
     async def unregister(self, client_id: str):
@@ -49,6 +62,26 @@ class WebSocketServer:
         if client_id in self.clients:
             del self.clients[client_id]
             logger.info(f"客户端已断开: {client_id} (总数: {len(self.clients)})")
+
+            if self.on_client_disconnected:
+                try:
+                    await self.on_client_disconnected(client_id)
+                except Exception as e:
+                    logger.warning(f"on_client_disconnected callback failed: {e!s}")
+
+    async def send_to(self, client_id: str, packet: BasePacket):
+        """Send a packet to the specified client."""
+        websocket = self.clients.get(client_id)
+        if not websocket:
+            logger.debug(f"Client {client_id} is not connected.")
+            return
+
+        try:
+            await websocket.send(packet.to_json())
+            logger.debug(f"发送消息到客户端 {client_id}: op={packet.op}")
+        except Exception as e:
+            logger.error(f"发送消息到客户端 {client_id} 失败: {e}")
+            await self.unregister(client_id)
 
     async def broadcast(self, packet: BasePacket):
         """广播消息到所有客户端"""

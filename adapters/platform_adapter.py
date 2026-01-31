@@ -1,10 +1,10 @@
 """Live2D 平台适配器 - AstrBot 平台适配器实现"""
 
 import asyncio
-import logging
 from asyncio import Queue
 
 try:
+    from astrbot.api import logger
     from astrbot.api.event import MessageChain
     from astrbot.api.message_components import Plain
     from astrbot.api.platform import (
@@ -30,8 +30,6 @@ from ..server.resource_server import ResourceServer
 from ..server.websocket_server import WebSocketServer
 from .message_event import Live2DMessageEvent
 
-logger = logging.getLogger(__name__)
-
 
 @register_platform_adapter(
     "live2d",
@@ -49,6 +47,7 @@ logger = logging.getLogger(__name__)
         "enable_auto_emotion": True,
         "enable_tts": False,
         "tts_mode": "local",
+        "enable_streaming": True,
         "resource_enabled": True,
         "resource_host": "0.0.0.0",
         "resource_port": 9091,
@@ -86,16 +85,22 @@ class Live2DPlatformAdapter(Platform):
         self.ws_server: WebSocketServer | None = None
         self.resource_server: ResourceServer | None = None
 
-        self.resource_manager = ResourceManager(
-            storage_dir=self.config_obj.resource_dir,
-            base_url=self.config_obj.resource_base_url,
-            resource_path=self.config_obj.resource_path,
-            max_inline_bytes=self.config_obj.resource_max_inline_bytes,
-            token=self.config_obj.resource_token,
-        )
+        self._stop_event = asyncio.Event()
+
+        self.resource_manager: ResourceManager | None = None
+        if self.config_obj.resource_enabled:
+            self.resource_manager = ResourceManager(
+                storage_dir=self.config_obj.resource_dir,
+                base_url=self.config_obj.resource_base_url,
+                resource_path=self.config_obj.resource_path,
+                max_inline_bytes=self.config_obj.resource_max_inline_bytes,
+                token=self.config_obj.resource_token,
+            )
 
         # 消息转换器
-        self.input_converter = InputMessageConverter(resource_manager=self.resource_manager)
+        self.input_converter = InputMessageConverter(
+            resource_manager=self.resource_manager,
+        )
         self.output_converter = OutputMessageConverter(
             enable_auto_emotion=platform_config.get("enable_auto_emotion", True),
             enable_tts=platform_config.get("enable_tts", False),
@@ -110,6 +115,7 @@ class Live2DPlatformAdapter(Platform):
 
         # 当前连接的客户端ID（单一连接约束）
         self.current_client_id: str | None = None
+        self._session_to_client_id: dict[str, str] = {}
 
         logger.info(f"[Live2D] 平台适配器已初始化，ID: {self.config.get('id')}")
 
@@ -177,7 +183,10 @@ class Live2DPlatformAdapter(Platform):
                 base_url = self._data.get("resource_base_url", "")
                 if base_url:
                     return base_url
-                return f"http://{self.resource_host}:{self.resource_port}"
+                host = self.resource_host
+                if host in {"0.0.0.0", "::"}:
+                    host = "127.0.0.1"
+                return f"http://{host}:{self.resource_port}"
 
             @property
             def resource_token(self) -> str:
@@ -384,6 +393,9 @@ class Live2DPlatformAdapter(Platform):
                 for key, value in extras.items():
                     message_event.set_extra(key, value)
 
+            # Cache session -> client mapping for correct routing in send_by_session.
+            self._session_to_client_id[str(abm.session_id)] = client_id
+
             # 提交事件到 AstrBot 事件队列
             self.commit_event(message_event)
             logger.info(f"[Live2D] 事件已提交到队列: session_id={abm.session_id}")
@@ -401,8 +413,22 @@ class Live2DPlatformAdapter(Platform):
             message_chain: 消息链
         """
         try:
-            if not self.ws_server or not self.current_client_id:
+            if not self.ws_server or not self.ws_server.clients:
                 logger.warning("[Live2D] 无可用连接，无法发送消息")
+                await super().send_by_session(session, message_chain)
+                return
+
+            target_client_id = self._session_to_client_id.get(str(session.session_id))
+            if not target_client_id:
+                # Fallback to the only connected client if possible.
+                if len(self.ws_server.clients) == 1:
+                    target_client_id = next(iter(self.ws_server.clients.keys()))
+                else:
+                    target_client_id = self.current_client_id
+
+            if not target_client_id:
+                logger.warning("[Live2D] 无法确定目标客户端，放弃发送")
+                await super().send_by_session(session, message_chain)
                 return
 
             # 转换 MessageChain 为表演序列
@@ -416,8 +442,7 @@ class Live2DPlatformAdapter(Platform):
             # 创建 perform.show 数据包
             packet = Protocol.create_perform_show(sequence=sequence, interrupt=True)
 
-            # 广播到客户端（实际上只会发送给唯一的客户端）
-            await self.ws_server.broadcast(packet)
+            await self.ws_server.send_to(target_client_id, packet)
 
             logger.info(f"[Live2D] 已发送表演序列，包含 {len(sequence)} 个元素")
 
@@ -431,11 +456,33 @@ class Live2DPlatformAdapter(Platform):
         """平台适配器主运行逻辑 - 启动 WebSocket 服务器并处理消息"""
         try:
             logger.info("[Live2D] 正在启动平台适配器...")
+            self._stop_event.clear()
 
             # 创建 WebSocket 服务器
             self.ws_server = WebSocketServer(
                 self.config_obj, resource_manager=self.resource_manager
             )
+
+            async def on_client_connected(client_id: str) -> None:
+                self.current_client_id = client_id
+                session = self._get_client_session(client_id)
+                session_id = session.get("session_id")
+                if session_id:
+                    self._session_to_client_id[str(session_id)] = client_id
+
+            async def on_client_disconnected(client_id: str) -> None:
+                if self.current_client_id == client_id:
+                    if self.ws_server and self.ws_server.clients:
+                        self.current_client_id = next(iter(self.ws_server.clients))
+                    else:
+                        self.current_client_id = None
+
+                for session_id, mapped in list(self._session_to_client_id.items()):
+                    if mapped == client_id:
+                        self._session_to_client_id.pop(session_id, None)
+
+            self.ws_server.on_client_connected = on_client_connected
+            self.ws_server.on_client_disconnected = on_client_disconnected
 
             # 修改 handler 以接入 AstrBot 事件流程
             await self._setup_message_handler()
@@ -460,7 +507,7 @@ class Live2DPlatformAdapter(Platform):
             )
 
             # 保持运行
-            await asyncio.Future()
+            await self._stop_event.wait()
 
         except Exception as e:
             logger.error(f"[Live2D] 平台适配器运行失败: {e}", exc_info=True)
@@ -506,6 +553,7 @@ class Live2DPlatformAdapter(Platform):
         """终止平台适配器运行"""
         try:
             logger.info("[Live2D] 正在停止平台适配器...")
+            self._stop_event.set()
 
             if self.ws_server:
                 await self.ws_server.stop()

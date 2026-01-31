@@ -63,8 +63,29 @@ class InputMessageConverter:
                 if voice_text:
                     text_parts.append(voice_text)
 
+            elif item_type == "file":
+                file_comp, file_text = self._convert_file(item)
+                if file_comp:
+                    message_components.append(file_comp)
+                if file_text:
+                    text_parts.append(file_text)
+
         message_str = "".join(text_parts)
         return message_components, message_str
+
+    def _set_component_url(self, comp: Any, url: str | None) -> Any:
+        """Best-effort set component.url for AstrBot pipeline compatibility.
+
+        AstrBot's STT stage expects `Record.url` to be populated.
+        """
+        if not comp or not url:
+            return comp
+        try:
+            setattr(comp, "url", url)
+        except Exception:
+            # Some mock components in standalone mode may be immutable.
+            pass
+        return comp
 
     def _convert_image(self, item: dict[str, Any]) -> Any | None:
         """转换图片消息"""
@@ -82,10 +103,12 @@ class InputMessageConverter:
         if rid and self.resource_manager:
             resource_path = self.resource_manager.get_resource_path(rid)
             if resource_path and resource_path.exists():
-                return Image.fromFileSystem(str(resource_path))
+                img = Image.fromFileSystem(str(resource_path))
+                return self._set_component_url(img, str(resource_path))
             resource_payload = self.resource_manager.get_resource_payload(rid)
             if resource_payload and resource_payload.get("url"):
-                return Image.fromURL(resource_payload["url"])
+                img = Image.fromURL(resource_payload["url"])
+                return self._set_component_url(img, resource_payload["url"])
 
         if data and data.startswith("data:image/"):
             # Base64 图片
@@ -104,7 +127,8 @@ class InputMessageConverter:
                     with open(temp_file, "wb") as f:
                         f.write(image_bytes)
 
-                    return Image.fromFileSystem(temp_file)
+                    img = Image.fromFileSystem(temp_file)
+                    return self._set_component_url(img, os.path.abspath(temp_file))
             except Exception as e:
                 print(f"[错误] 解析 Base64 图片失败: {e}")
                 return None
@@ -112,10 +136,12 @@ class InputMessageConverter:
         elif url:
             # URL 图片
             if url.startswith("http://") or url.startswith("https://"):
-                return Image.fromURL(url)
+                img = Image.fromURL(url)
+                return self._set_component_url(img, url)
             elif url.startswith("file:///"):
                 local_path = url[8:] if os.name == "nt" else url[7:]
-                return Image.fromFileSystem(local_path)
+                img = Image.fromFileSystem(local_path)
+                return self._set_component_url(img, os.path.abspath(local_path))
 
         return None
 
@@ -142,10 +168,14 @@ class InputMessageConverter:
         if rid and self.resource_manager and Record:
             resource_path = self.resource_manager.get_resource_path(rid)
             if resource_path and resource_path.exists():
-                return Record.fromFileSystem(str(resource_path)), "[语音]"
+                rec = Record.fromFileSystem(str(resource_path))
+                rec = self._set_component_url(rec, str(resource_path))
+                return rec, "[语音]"
             resource_payload = self.resource_manager.get_resource_payload(rid)
             if resource_payload and resource_payload.get("url"):
-                return Record.fromURL(resource_payload["url"]), "[语音]"
+                rec = Record.fromURL(resource_payload["url"])
+                rec = self._set_component_url(rec, resource_payload["url"])
+                return rec, "[语音]"
 
         # 优先处理 Base64 音频数据
         if data and Record:
@@ -181,7 +211,9 @@ class InputMessageConverter:
                         f.write(audio_bytes)
 
                     print(f"[信息] 已保存语音文件: {temp_file}, 格式: {audio_format_raw}")
-                    return Record.fromFileSystem(temp_file), "[语音]"
+                    rec = Record.fromFileSystem(temp_file)
+                    rec = self._set_component_url(rec, os.path.abspath(temp_file))
+                    return rec, "[语音]"
             except Exception as e:
                 print(f"[错误] 解析 Base64 音频失败: {e}")
 
@@ -189,8 +221,77 @@ class InputMessageConverter:
         if url and Record:
             if url.startswith("file:///"):
                 local_path = url[8:] if os.name == "nt" else url[7:]
-                return Record.fromFileSystem(local_path), "[语音]"
+                rec = Record.fromFileSystem(local_path)
+                rec = self._set_component_url(rec, os.path.abspath(local_path))
+                return rec, "[语音]"
             if url.startswith("http://") or url.startswith("https://"):
-                return Record.fromURL(url), "[语音]"
+                rec = Record.fromURL(url)
+                rec = self._set_component_url(rec, url)
+                return rec, "[语音]"
+
+        return None, None
+
+    def _convert_file(self, item: dict[str, Any]) -> tuple[Any | None, str | None]:
+        """转换文件消息，返回 (组件, 文本)"""
+        if not File:
+            return None, None
+
+        name = item.get("name") or item.get("filename") or "file"
+        url = item.get("url")
+        data = item.get("data")
+        inline = item.get("inline")
+        rid = item.get("rid")
+        mime = item.get("mime") or item.get("contentType") or "application/octet-stream"
+
+        if inline and not data:
+            data = inline
+
+        if rid and self.resource_manager:
+            resource_path = self.resource_manager.get_resource_path(rid)
+            if resource_path and resource_path.exists():
+                return File(name=str(name), file=str(resource_path)), f"[文件] {name}"
+            resource_payload = self.resource_manager.get_resource_payload(rid)
+            if resource_payload and resource_payload.get("url"):
+                return (
+                    File(name=str(name), url=str(resource_payload["url"])),
+                    f"[文件] {name}",
+                )
+
+        if data and isinstance(data, str) and data.startswith("data:"):
+            try:
+                header, b64_data = data.split(",", 1)
+                if ";base64" not in header:
+                    return None, None
+                file_bytes = base64.b64decode(b64_data)
+
+                suffix = ""
+                try:
+                    import mimetypes
+
+                    suffix = mimetypes.guess_extension(mime) or ""
+                except Exception:
+                    suffix = ""
+
+                temp_file = os.path.join(
+                    self.temp_dir,
+                    f"live2d_file_{os.urandom(8).hex()}{suffix}",
+                )
+                with open(temp_file, "wb") as f:
+                    f.write(file_bytes)
+
+                return (
+                    File(name=str(name), file=os.path.abspath(temp_file)),
+                    f"[文件] {name}",
+                )
+            except Exception as e:
+                print(f"[错误] 解析 Base64 文件失败: {e}")
+                return None, None
+
+        if url:
+            if url.startswith("file:///"):
+                local_path = url[8:] if os.name == "nt" else url[7:]
+                return File(name=str(name), file=os.path.abspath(local_path)), f"[文件] {name}"
+            if url.startswith("http://") or url.startswith("https://"):
+                return File(name=str(name), url=url), f"[文件] {name}"
 
         return None, None

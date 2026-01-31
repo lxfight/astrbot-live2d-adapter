@@ -5,9 +5,14 @@ from __future__ import annotations
 import logging
 from aiohttp import web
 
+try:
+    from astrbot.api import logger as _astr_logger
+except Exception:
+    _astr_logger = None
+
 from .resource_manager import ResourceManager
 
-logger = logging.getLogger(__name__)
+logger = _astr_logger or logging.getLogger(__name__)
 
 
 class ResourceServer:
@@ -97,4 +102,3 @@ class ResourceServer:
         if self.runner:
             await self.runner.cleanup()
         logger.info("[Live2D] 资源服务已停止")
-
