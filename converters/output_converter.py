@@ -47,10 +47,6 @@ except ImportError:
         WechatEmoji,
     ) = (None,) * 15
 
-from ..core.motion_types import (
-    enhance_perform_sequence_with_motion_type,
-    infer_motion_type_from_message,
-)
 from ..core.protocol import (
     create_expression_element,
     create_image_element,
@@ -66,7 +62,7 @@ class OutputMessageConverter:
 
     def __init__(
         self,
-        enable_auto_emotion: bool = True,
+        enable_auto_emotion: bool = False,
         enable_tts: bool = True,
         tts_mode: str = "remote",
         resource_manager: Any | None = None,
@@ -76,13 +72,13 @@ class OutputMessageConverter:
         初始化转换器
 
         Args:
-            enable_auto_emotion: 是否启用自动情感识别（动作/表情）
+            enable_auto_emotion: 已弃用，保留仅为兼容性
             enable_tts: 是否启用 TTS
             tts_mode: TTS 模式 (remote/local)
             resource_manager: 资源管理器（处理本地文件转资源）
             resource_config: 资源配置（inline 限制等）
         """
-        self.enable_auto_emotion = enable_auto_emotion
+        self.enable_auto_emotion = enable_auto_emotion  # 保留以兼容旧代码
         self.enable_tts = enable_tts
         self.tts_mode = tts_mode
         self.resource_manager = resource_manager
@@ -106,7 +102,6 @@ class OutputMessageConverter:
 
         sequence = []
         full_text = ""
-        has_added_emotion = False
 
         for component in message_chain.chain:
             if Plain and isinstance(component, Plain):
@@ -158,49 +153,89 @@ class OutputMessageConverter:
                     sequence.append(file_element)
                     file_name = getattr(component, "name", "") or "file"
                     full_text += f"[文件:{file_name}]"
-            else:
-                fallback_text = self._format_component_text(component)
-                if fallback_text:
-                    full_text += fallback_text
-                    sequence.append(
-                        create_text_element(
-                            content=fallback_text,
-                            duration=0,
-                            position="center",
+
+            # 自定义 Live2D 组件支持：Live2DMotion 和 Live2DExpression
+            elif hasattr(component, "type"):
+                if component.type == "live2d_motion":
+                    # 支持通过自定义组件下发动作
+                    motion_elem = self._build_motion_from_component(component)
+                    if motion_elem:
+                        sequence.append(motion_elem)
+                elif component.type == "live2d_expression":
+                    # 支持通过自定义组件下发表情
+                    expression_elem = self._build_expression_from_component(component)
+                    if expression_elem:
+                        sequence.append(expression_elem)
+                else:
+                    # 其他组件转为文本
+                    fallback_text = self._format_component_text(component)
+                    if fallback_text:
+                        full_text += fallback_text
+                        sequence.append(
+                            create_text_element(
+                                content=fallback_text,
+                                duration=0,
+                                position="center",
+                            )
                         )
-                    )
-
-        # 使用新的动作类型匹配系统
-        if self.enable_auto_emotion and full_text and not has_added_emotion:
-            # 方案2：仅下发动作类型，不下发具体动作/表情ID。
-            # 桌面端根据 motionType 从本地分配集合中随机选择；若该类型为空则回退到待机集合。
-            motion_type = infer_motion_type_from_message(full_text)
-
-            # 发送一个“类型化表情”占位（不携带具体 expressionId）
-            expression_element = create_expression_element(expression_id="", fade=300)
-            expression_element["motionType"] = motion_type
-            sequence.append(expression_element)
-
-            # 发送一个“类型化动作”占位（group/index 不作为真实指令使用）
-            motion_element = create_motion_element(group="Idle", index=0, priority=2)
-            motion_element["motionType"] = motion_type
-            sequence.append(motion_element)
-
-            has_added_emotion = True
-
-        # 如果没有添加情感，添加默认动作
-        if not has_added_emotion and full_text:
-            motion_type = infer_motion_type_from_message(full_text)
-            motion_element = create_motion_element(group="Idle", index=0, priority=2)
-            motion_element["motionType"] = motion_type
-            sequence.append(motion_element)
-
-        # 为整个序列添加动作类型信息
-        if full_text:
-            motion_type = infer_motion_type_from_message(full_text)
-            sequence = enhance_perform_sequence_with_motion_type(sequence, motion_type)
 
         return sequence
+
+    def _build_motion_from_component(self, component: Any) -> dict[str, Any] | None:
+        """从自定义 Live2DMotion 组件构建动作元素
+
+        组件属性:
+            - group: str - 动作组名
+            - index: int - 动作索引（默认 0）
+            - priority: int - 优先级（默认 2）
+            - loop: bool - 是否循环（默认 False）
+            - fade_in: int - 淡入时间ms（默认 300）
+            - fade_out: int - 淡出时间ms（默认 300）
+            - motion_type: str - 动作类型（可选，如 happy, sad）
+        """
+        group = getattr(component, "group", None)
+        if not group:
+            return None
+
+        motion_elem = create_motion_element(
+            group=group,
+            index=getattr(component, "index", 0),
+            priority=getattr(component, "priority", 2),
+            loop=getattr(component, "loop", False),
+            fade_in=getattr(component, "fade_in", 300),
+            fade_out=getattr(component, "fade_out", 300),
+        )
+
+        # 支持 motionType（由其他模块提供）
+        motion_type = getattr(component, "motion_type", None)
+        if motion_type:
+            motion_elem["motionType"] = motion_type
+
+        return motion_elem
+
+    def _build_expression_from_component(self, component: Any) -> dict[str, Any] | None:
+        """从自定义 Live2DExpression 组件构建表情元素
+
+        组件属性:
+            - expression_id: str - 表情ID
+            - fade: int - 淡入淡出时间ms（默认 300）
+            - motion_type: str - 动作类型（可选）
+        """
+        expression_id = getattr(component, "expression_id", None) or getattr(component, "id", None)
+        if expression_id is None:
+            return None
+
+        expression_elem = create_expression_element(
+            expression_id=expression_id,
+            fade=getattr(component, "fade", 300),
+        )
+
+        # 支持 motionType
+        motion_type = getattr(component, "motion_type", None)
+        if motion_type:
+            expression_elem["motionType"] = motion_type
+
+        return expression_elem
 
     def _get_image_url(self, image: Any) -> str | None:
         """获取图片 URL"""

@@ -13,13 +13,8 @@ except Exception as e:  # pragma: no cover
     )
 
 from ..converters.output_converter import OutputMessageConverter
-from ..core.motion_types import infer_motion_type_from_message
-from ..core.protocol import (
-    BasePacket,
-    Protocol,
-    create_expression_element,
-    create_motion_element,
-)
+from ..core.protocol import BasePacket
+from ..core.protocol import Protocol as ProtocolClass
 
 
 class Live2DMessageEvent(AstrMessageEvent):
@@ -56,7 +51,7 @@ class Live2DMessageEvent(AstrMessageEvent):
 
         # 初始化消息转换器
         self.output_converter = OutputMessageConverter(
-            enable_auto_emotion=config.get("enable_auto_emotion", True),
+            enable_auto_emotion=False,  # 已弃用，保留仅为兼容性
             enable_tts=config.get("enable_tts", True),
             tts_mode=config.get("tts_mode", "remote"),
             resource_manager=self.resource_manager,
@@ -90,7 +85,7 @@ class Live2DMessageEvent(AstrMessageEvent):
                 return
 
             # 创建 perform.show 数据包
-            packet = Protocol.create_perform_show(
+            packet = ProtocolClass.create_perform_show(
                 sequence=sequence,
                 interrupt=True,  # 默认中断当前表演
             )
@@ -151,7 +146,7 @@ class Live2DMessageEvent(AstrMessageEvent):
                         ):
                             sequence = self.output_converter.convert_streaming(buffer)
                             if sequence:
-                                packet = Protocol.create_perform_show(
+                                packet = ProtocolClass.create_perform_show(
                                     sequence=sequence,
                                     interrupt=False,  # 流式输出不中断
                                 )
@@ -163,21 +158,7 @@ class Live2DMessageEvent(AstrMessageEvent):
             if buffer:
                 sequence = self.output_converter.convert_streaming(buffer)
                 if sequence:
-                    if self.output_converter.enable_auto_emotion:
-                        motion_type = infer_motion_type_from_message(buffer)
-                        expression_element = create_expression_element(
-                            expression_id="", fade=300
-                        )
-                        expression_element["motionType"] = motion_type
-                        sequence.append(expression_element)
-
-                        motion_element = create_motion_element(
-                            group="Idle", index=0, priority=2
-                        )
-                        motion_element["motionType"] = motion_type
-                        sequence.append(motion_element)
-
-                    packet = Protocol.create_perform_show(
+                    packet = ProtocolClass.create_perform_show(
                         sequence=sequence, interrupt=False
                     )
                     await self._send_to_client(packet)

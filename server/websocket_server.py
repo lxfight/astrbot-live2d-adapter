@@ -15,7 +15,8 @@ except Exception:
     _astr_logger = None
 
 from ..core.config import ConfigLike
-from ..core.protocol import BasePacket, Protocol
+from ..core.protocol import BasePacket
+from ..core.protocol import Protocol as ProtocolClass
 from .message_handler import MessageHandler
 
 logger = _astr_logger or logging.getLogger(__name__)
@@ -125,8 +126,8 @@ class WebSocketServer:
                 logger.warning(
                     f"拒绝连接: 路径不匹配 (期望: {self.config.ws_path}, 实际: {path})"
                 )
-                error = Protocol.create_error_packet(
-                    Protocol.ERROR_INVALID_PAYLOAD,
+                error = ProtocolClass.create_error_packet(
+                    ProtocolClass.ERROR_INVALID_PAYLOAD,
                     f"路径不匹配，期望: {self.config.ws_path}",
                 )
                 await websocket.send(error.to_json())
@@ -142,10 +143,10 @@ class WebSocketServer:
                 message = message.decode("utf-8", errors="replace")
             packet = BasePacket.from_json(message)
 
-            if packet.op != Protocol.OP_HANDSHAKE:
+            if packet.op != ProtocolClass.OP_HANDSHAKE:
                 logger.error(f"首个消息不是握手: {packet.op}")
-                error = Protocol.create_error_packet(
-                    Protocol.ERROR_INVALID_PAYLOAD, "首个消息必须是握手"
+                error = ProtocolClass.create_error_packet(
+                    ProtocolClass.ERROR_INVALID_PAYLOAD, "首个消息必须是握手"
                 )
                 await websocket.send(error.to_json())
                 return
@@ -167,7 +168,7 @@ class WebSocketServer:
             await websocket.send(response.to_json())
 
             # 如果握手失败，关闭连接
-            if response.op == Protocol.OP_ERROR:
+            if response.op == ProtocolClass.OP_ERROR:
                 return
 
             # 注册客户端
@@ -175,8 +176,8 @@ class WebSocketServer:
                 return
 
             # 发送 ready 事件
-            ready_packet = Protocol.create_packet(
-                Protocol.OP_STATE_READY, payload={"clientId": client_id}
+            ready_packet = ProtocolClass.create_packet(
+                ProtocolClass.OP_STATE_READY, payload={"clientId": client_id}
             )
             await websocket.send(ready_packet.to_json())
 
@@ -194,8 +195,8 @@ class WebSocketServer:
 
                 except Exception as e:
                     logger.error(f"处理消息时出错: {e}", exc_info=True)
-                    error = Protocol.create_error_packet(
-                        Protocol.ERROR_INVALID_PAYLOAD, f"消息处理失败: {e!s}"
+                    error = ProtocolClass.create_error_packet(
+                        ProtocolClass.ERROR_INVALID_PAYLOAD, f"消息处理失败: {e!s}"
                     )
                     await websocket.send(error.to_json())
 

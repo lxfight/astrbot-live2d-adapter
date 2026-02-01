@@ -24,7 +24,8 @@ except ImportError as e:
 from ..converters.input_converter import InputMessageConverter
 from ..converters.output_converter import OutputMessageConverter
 from ..core.config import ConfigLike
-from ..core.protocol import BasePacket, Protocol
+from ..core.protocol import BasePacket
+from ..core.protocol import Protocol as ProtocolClass
 from ..server.resource_manager import ResourceManager
 from ..server.resource_server import ResourceServer
 from ..server.websocket_server import WebSocketServer
@@ -44,7 +45,6 @@ from .message_event import Live2DMessageEvent
         "auth_token": "",
         "max_connections": 1,
         "kick_old": True,
-        "enable_auto_emotion": True,
         "enable_tts": False,
         "tts_mode": "local",
         "enable_streaming": True,
@@ -84,10 +84,9 @@ class Live2DPlatformAdapter(Platform):
         super().__init__(platform_config, event_queue)
 
         self.settings = platform_settings
-        self.platform_config = platform_config
 
         # 初始化配置对象（用于兼容现有代码）
-        self.config_obj: ConfigLike = self._create_config_from_dict(platform_config)
+        self.config_obj: ConfigLike = self._create_config_from_dict(self.config)
 
         # WebSocket 服务器实例
         self.ws_server: WebSocketServer | None = None
@@ -99,7 +98,7 @@ class Live2DPlatformAdapter(Platform):
         self.resource_manager: ResourceManager | None = None
         if self.config_obj.resource_enabled:
             resource_ttl_seconds = int(
-                platform_config.get("resource_ttl_seconds", 0) or 0
+                self.config.get("resource_ttl_seconds", 0) or 0
             )
             resource_ttl_ms = (
                 resource_ttl_seconds * 1000 if resource_ttl_seconds > 0 else None
@@ -111,22 +110,22 @@ class Live2DPlatformAdapter(Platform):
                 max_inline_bytes=self.config_obj.resource_max_inline_bytes,
                 token=self.config_obj.resource_token,
                 ttl_ms=resource_ttl_ms,
-                max_total_bytes=platform_config.get("resource_max_total_bytes"),
-                max_total_files=platform_config.get("resource_max_files"),
+                max_total_bytes=self.config.get("resource_max_total_bytes"),
+                max_total_files=self.config.get("resource_max_files"),
             )
 
         # 消息转换器
         self.input_converter = InputMessageConverter(
-            temp_dir=platform_config.get("temp_dir"),
-            temp_ttl_seconds=platform_config.get("temp_ttl_seconds"),
-            temp_max_total_bytes=platform_config.get("temp_max_total_bytes"),
-            temp_max_files=platform_config.get("temp_max_files"),
+            temp_dir=self.config.get("temp_dir"),
+            temp_ttl_seconds=self.config.get("temp_ttl_seconds"),
+            temp_max_total_bytes=self.config.get("temp_max_total_bytes"),
+            temp_max_files=self.config.get("temp_max_files"),
             resource_manager=self.resource_manager,
         )
         self.output_converter = OutputMessageConverter(
-            enable_auto_emotion=platform_config.get("enable_auto_emotion", True),
-            enable_tts=platform_config.get("enable_tts", False),
-            tts_mode=platform_config.get("tts_mode", "local"),
+            enable_auto_emotion=False,  # 已弃用，保留仅为兼容性
+            enable_tts=self.config.get("enable_tts", False),
+            tts_mode=self.config.get("tts_mode", "local"),
             resource_manager=self.resource_manager,
             resource_config={
                 "max_inline_bytes": self.config_obj.resource_max_inline_bytes,
@@ -289,7 +288,7 @@ class Live2DPlatformAdapter(Platform):
         Returns:
             AstrBotMessage 对象，如果转换失败则返回 None
         """
-        if packet.op != Protocol.OP_INPUT_MESSAGE:
+        if packet.op != ProtocolClass.OP_INPUT_MESSAGE:
             logger.warning(f"[Live2D] 非 input.message 类型数据包: {packet.op}")
             return None
 
@@ -401,12 +400,9 @@ class Live2DPlatformAdapter(Platform):
                 websocket_server=self.ws_server,
                 client_id=client_id,
                 config={
-                    "enable_auto_emotion": self.platform_config.get(
-                        "enable_auto_emotion", True
-                    ),
-                    "enable_tts": self.platform_config.get("enable_tts", False),
-                    "tts_mode": self.platform_config.get("tts_mode", "local"),
-                    "enable_streaming": self.platform_config.get(
+                    "enable_tts": self.config.get("enable_tts", False),
+                    "tts_mode": self.config.get("tts_mode", "local"),
+                    "enable_streaming": self.config.get(
                         "enable_streaming", True
                     ),
                 },
@@ -464,7 +460,7 @@ class Live2DPlatformAdapter(Platform):
                 return
 
             # 创建 perform.show 数据包
-            packet = Protocol.create_perform_show(sequence=sequence, interrupt=True)
+            packet = ProtocolClass.create_perform_show(sequence=sequence, interrupt=True)
 
             await self.ws_server.send_to(target_client_id, packet)
 
@@ -550,7 +546,7 @@ class Live2DPlatformAdapter(Platform):
             """统一消息处理器 - 接入 AstrBot 事件流程"""
             self.current_client_id = client_id
 
-            if packet.op == Protocol.OP_INPUT_MESSAGE:
+            if packet.op == ProtocolClass.OP_INPUT_MESSAGE:
                 abm = await self.convert_message(packet, client_id)
                 if abm:
                     await self.handle_msg(
@@ -558,12 +554,12 @@ class Live2DPlatformAdapter(Platform):
                     )
                 return
 
-            if packet.op == Protocol.OP_INPUT_TOUCH:
+            if packet.op == ProtocolClass.OP_INPUT_TOUCH:
                 abm = self.convert_touch(packet, client_id)
                 await self.handle_msg(abm, client_id, extras={"live2d_op": packet.op})
                 return
 
-            if packet.op == Protocol.OP_INPUT_SHORTCUT:
+            if packet.op == ProtocolClass.OP_INPUT_SHORTCUT:
                 abm = self.convert_shortcut(packet, client_id)
                 await self.handle_msg(abm, client_id, extras={"live2d_op": packet.op})
                 return
@@ -598,7 +594,7 @@ class Live2DPlatformAdapter(Platform):
             logger.debug(f"[Live2D] Temp cleanup failed: {e!s}")
 
     async def _cleanup_loop(self) -> None:
-        interval = int(self.platform_config.get("cleanup_interval_seconds", 600) or 600)
+        interval = int(self.config.get("cleanup_interval_seconds", 600) or 600)
         if interval < 10:
             interval = 10
 
