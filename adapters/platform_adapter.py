@@ -2,6 +2,7 @@
 
 import asyncio
 from asyncio import Queue
+from pathlib import Path
 
 try:
     from astrbot.api import logger
@@ -16,6 +17,7 @@ try:
         register_platform_adapter,
     )
     from astrbot.core.platform.message_session import MessageSesion
+    from astrbot.core.star.star_tools import StarTools
 except ImportError as e:
     raise ImportError(
         f"无法导入 AstrBot 模块，请确保此适配器作为 AstrBot 插件运行: {e}"
@@ -39,31 +41,37 @@ from .message_event import Live2DMessageEvent
         "type": "live2d",
         "enable": False,
         "id": "live2d_default",
-        "ws_host": "0.0.0.0",
-        "ws_port": 9090,
-        "ws_path": "/astrbot/live2d",
-        "auth_token": "",
-        "max_connections": 1,
-        "kick_old": True,
-        "enable_tts": False,
-        "tts_mode": "local",
-        "enable_streaming": True,
-        "resource_enabled": True,
-        "resource_host": "0.0.0.0",
-        "resource_port": 9091,
-        "resource_path": "/resources",
-        "resource_dir": "./data/live2d_resources",
-        "resource_base_url": "",
-        "resource_token": "",
-        "resource_max_inline_bytes": 262144,
-        "resource_ttl_seconds": 604800,
-        "resource_max_total_bytes": 1073741824,
-        "resource_max_files": 2000,
-        "temp_dir": "./data/live2d_temp",
-        "temp_ttl_seconds": 21600,
-        "temp_max_total_bytes": 268435456,
-        "temp_max_files": 5000,
-        "cleanup_interval_seconds": 600,
+        # WebSocket 服务器配置 | WebSocket Server Configuration
+        "ws_host": "0.0.0.0",  # WebSocket 服务监听地址 | Listen address
+        "ws_port": 9090,  # WebSocket 服务端口 | Server port
+        "ws_path": "/astrbot/live2d",  # WebSocket 连接路径 | Connection path
+        "auth_token": "",  # 认证令牌(可选) | Auth token (optional)
+        "max_connections": 1,  # 最大连接数 | Max connections
+        "kick_old": True,  # 断开旧连接 | Kick old connections
+        # 语音合成 | TTS
+        "enable_tts": False,  # 启用TTS | Enable TTS
+        "tts_mode": "local",  # TTS模式(local/remote) | TTS mode
+        # 流式消息 | Streaming
+        "enable_streaming": True,  # 启用流式推送 | Enable streaming
+        # 资源服务器 | Resource Server
+        "resource_enabled": True,  # 启用资源服务 | Enable resource server
+        "resource_host": "0.0.0.0",  # 资源服务监听地址 | Resource listen address
+        "resource_port": 9091,  # 资源服务端口 | Resource port
+        "resource_path": "/resources",  # 资源访问路径 | Resource path
+        "resource_dir": "live2d_resources",  # 资源存储目录 | Resource directory
+        "resource_base_url": "",  # 资源基础URL(空=自动) | Base URL (empty=auto)
+        "resource_token": "",  # 资源访问令牌(空=复用auth_token) | Resource token
+        "resource_max_inline_bytes": 262144,  # 内联资源最大字节(256KB) | Max inline bytes
+        "resource_ttl_seconds": 604800,  # 资源TTL(7天) | Resource TTL (7 days)
+        "resource_max_total_bytes": 1073741824,  # 最大总字节(1GB) | Max total bytes
+        "resource_max_files": 2000,  # 最大文件数 | Max files
+        # 临时文件 | Temporary Files
+        "temp_dir": "live2d_temp",  # 临时文件目录 | Temp directory
+        "temp_ttl_seconds": 21600,  # 临时文件TTL(6小时) | Temp TTL (6 hours)
+        "temp_max_total_bytes": 268435456,  # 临时文件最大总字节(256MB) | Max temp bytes
+        "temp_max_files": 5000,  # 临时文件最大数量 | Max temp files
+        # 系统配置 | System Configuration
+        "cleanup_interval_seconds": 600,  # 清理检查间隔(10分钟) | Cleanup interval
     },
     adapter_display_name="Live2D",
     support_streaming_message=True,
@@ -85,8 +93,13 @@ class Live2DPlatformAdapter(Platform):
 
         self.settings = platform_settings
 
-        # 初始化配置对象（用于兼容现有代码）
-        self.config_obj: ConfigLike = self._create_config_from_dict(self.config)
+        # 获取插件数据目录
+        plugin_data_dir = StarTools.get_data_dir("astrbot-live2d-adapter")
+
+        # 初始化配置对象
+        self.config_obj: ConfigLike = self._create_config_from_dict(
+            self.config, plugin_data_dir
+        )
 
         # WebSocket 服务器实例
         self.ws_server: WebSocketServer | None = None
@@ -97,11 +110,10 @@ class Live2DPlatformAdapter(Platform):
 
         self.resource_manager: ResourceManager | None = None
         if self.config_obj.resource_enabled:
-            resource_ttl_seconds = int(
-                self.config.get("resource_ttl_seconds", 0) or 0
-            )
             resource_ttl_ms = (
-                resource_ttl_seconds * 1000 if resource_ttl_seconds > 0 else None
+                self.config_obj.resource_ttl_seconds * 1000
+                if self.config_obj.resource_ttl_seconds > 0
+                else None
             )
             self.resource_manager = ResourceManager(
                 storage_dir=self.config_obj.resource_dir,
@@ -110,22 +122,21 @@ class Live2DPlatformAdapter(Platform):
                 max_inline_bytes=self.config_obj.resource_max_inline_bytes,
                 token=self.config_obj.resource_token,
                 ttl_ms=resource_ttl_ms,
-                max_total_bytes=self.config.get("resource_max_total_bytes"),
-                max_total_files=self.config.get("resource_max_files"),
+                max_total_bytes=self.config_obj.resource_max_total_bytes,
+                max_total_files=self.config_obj.resource_max_files,
             )
 
         # 消息转换器
         self.input_converter = InputMessageConverter(
-            temp_dir=self.config.get("temp_dir"),
-            temp_ttl_seconds=self.config.get("temp_ttl_seconds"),
-            temp_max_total_bytes=self.config.get("temp_max_total_bytes"),
-            temp_max_files=self.config.get("temp_max_files"),
+            temp_dir=self.config_obj.temp_dir,
+            temp_ttl_seconds=self.config_obj.temp_ttl_seconds,
+            temp_max_total_bytes=self.config_obj.temp_max_total_bytes,
+            temp_max_files=self.config_obj.temp_max_files,
             resource_manager=self.resource_manager,
         )
         self.output_converter = OutputMessageConverter(
-            enable_auto_emotion=False,  # 已弃用，保留仅为兼容性
-            enable_tts=self.config.get("enable_tts", False),
-            tts_mode=self.config.get("tts_mode", "local"),
+            enable_tts=self.config_obj.enable_tts,
+            tts_mode=self.config_obj.tts_mode,
             resource_manager=self.resource_manager,
             resource_config={
                 "max_inline_bytes": self.config_obj.resource_max_inline_bytes,
@@ -140,20 +151,23 @@ class Live2DPlatformAdapter(Platform):
 
         logger.info(f"[Live2D] 平台适配器已初始化，ID: {self.config.get('id')}")
 
-    def _create_config_from_dict(self, config_dict: dict) -> ConfigLike:
-        """从字典创建 Config 对象（用于兼容现有 WebSocketServer）
+    def _create_config_from_dict(
+        self, config_dict: dict, plugin_data_dir: Path
+    ) -> ConfigLike:
+        """从配置字典创建配置对象
 
         Args:
             config_dict: 配置字典
+            plugin_data_dir: 插件数据目录
 
         Returns:
-            Config 对象
+            配置对象
         """
 
-        # 创建一个模拟 Config 类的对象
         class ConfigAdapter:
-            def __init__(self, data: dict):
+            def __init__(self, data: dict, base_dir: Path):
                 self._data = data
+                self._base_dir = base_dir
 
             @property
             def server_host(self) -> str:
@@ -169,7 +183,7 @@ class Live2DPlatformAdapter(Platform):
 
             @property
             def ws_path(self) -> str:
-                return self._data.get("ws_path", "/ws")
+                return self._data.get("ws_path", "/astrbot/live2d")
 
             @property
             def max_connections(self) -> int:
@@ -178,6 +192,14 @@ class Live2DPlatformAdapter(Platform):
             @property
             def kick_old(self) -> bool:
                 return self._data.get("kick_old", True)
+
+            @property
+            def enable_tts(self) -> bool:
+                return self._data.get("enable_tts", False)
+
+            @property
+            def tts_mode(self) -> str:
+                return self._data.get("tts_mode", "local")
 
             @property
             def resource_enabled(self) -> bool:
@@ -197,7 +219,11 @@ class Live2DPlatformAdapter(Platform):
 
             @property
             def resource_dir(self) -> str:
-                return self._data.get("resource_dir", "./data/live2d_resources")
+                default_dir = self._base_dir / "live2d_resources"
+                resource_dir = self._data.get("resource_dir", str(default_dir))
+                if not Path(resource_dir).is_absolute():
+                    resource_dir = str(self._base_dir / resource_dir)
+                return resource_dir
 
             @property
             def resource_base_url(self) -> str:
@@ -212,15 +238,49 @@ class Live2DPlatformAdapter(Platform):
             @property
             def resource_token(self) -> str:
                 token = self._data.get("resource_token", "")
-                if token:
-                    return token
-                return self.auth_token
+                return token if token else self.auth_token
 
             @property
             def resource_max_inline_bytes(self) -> int:
-                return int(self._data.get("resource_max_inline_bytes", 262144))
+                return self._data.get("resource_max_inline_bytes", 262144)
 
-        return ConfigAdapter(config_dict)
+            @property
+            def resource_ttl_seconds(self) -> int:
+                return self._data.get("resource_ttl_seconds", 604800)
+
+            @property
+            def resource_max_total_bytes(self) -> int:
+                return self._data.get("resource_max_total_bytes", 1073741824)
+
+            @property
+            def resource_max_files(self) -> int:
+                return self._data.get("resource_max_files", 2000)
+
+            @property
+            def temp_dir(self) -> str:
+                default_dir = self._base_dir / "live2d_temp"
+                temp_dir = self._data.get("temp_dir", str(default_dir))
+                if not Path(temp_dir).is_absolute():
+                    temp_dir = str(self._base_dir / temp_dir)
+                return temp_dir
+
+            @property
+            def temp_ttl_seconds(self) -> int:
+                return self._data.get("temp_ttl_seconds", 21600)
+
+            @property
+            def temp_max_total_bytes(self) -> int:
+                return self._data.get("temp_max_total_bytes", 268435456)
+
+            @property
+            def temp_max_files(self) -> int:
+                return self._data.get("temp_max_files", 5000)
+
+            @property
+            def cleanup_interval_seconds(self) -> int:
+                return self._data.get("cleanup_interval_seconds", 600)
+
+        return ConfigAdapter(config_dict, plugin_data_dir)
 
     def meta(self) -> PlatformMetadata:
         """返回平台元数据

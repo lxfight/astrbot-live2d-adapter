@@ -62,23 +62,19 @@ class OutputMessageConverter:
 
     def __init__(
         self,
-        enable_auto_emotion: bool = False,
         enable_tts: bool = True,
         tts_mode: str = "remote",
         resource_manager: Any | None = None,
         resource_config: dict[str, Any] | None = None,
     ):
-        """
-        初始化转换器
+        """初始化转换器
 
         Args:
-            enable_auto_emotion: 已弃用，保留仅为兼容性
             enable_tts: 是否启用 TTS
             tts_mode: TTS 模式 (remote/local)
             resource_manager: 资源管理器（处理本地文件转资源）
             resource_config: 资源配置（inline 限制等）
         """
-        self.enable_auto_emotion = enable_auto_emotion  # 保留以兼容旧代码
         self.enable_tts = enable_tts
         self.tts_mode = tts_mode
         self.resource_manager = resource_manager
