@@ -117,8 +117,10 @@ class MessageHandler:
                 )
 
         # 生成会话信息
-        session_id = f"live2d_session_{client_id}"
-        user_id = f"live2d_user_{client_id}"
+        # Live2D 客户端使用固定的 client_id 作为 session_id
+        # 类似私聊场景，同一个客户端永远是同一个 session_id
+        session_id = client_id
+        user_id = client_id
         self.client_states.setdefault(client_id, {})["session"] = {
             "session_id": session_id,
             "user_id": user_id,
