@@ -45,7 +45,6 @@ class MessageHandler:
         Returns:
             响应数据包（如果需要响应）
         """
-        logger.info(f"处理来自客户端 {client_id} 的消息: op={packet.op}")
 
         if packet.op == ProtocolClass.OP_HANDSHAKE:
             return await self.handle_handshake(packet, client_id)
