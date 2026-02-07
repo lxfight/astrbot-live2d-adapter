@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 
 from aiohttp import web
-
-try:
-    from astrbot.api import logger as _astr_logger
-except Exception:
-    _astr_logger = None
+from astrbot.api import logger
 
 from .resource_manager import ResourceManager
-
-logger = _astr_logger or logging.getLogger(__name__)
 
 
 class ResourceServer:

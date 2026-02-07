@@ -4,12 +4,11 @@ import time
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 
 from .adapters.platform_adapter import Live2DPlatformAdapter
 
 
-@register("Live2DAdapter", "lxfight", "Live2DAdapter 插件", "1.0.0")
 class Live2DAdapter(Star):
     """Live2D 平台适配器插件"""
 

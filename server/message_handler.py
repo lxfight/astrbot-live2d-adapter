@@ -1,12 +1,8 @@
 """消息处理器"""
 
-import logging
 from collections.abc import Callable
 
-try:
-    from astrbot.api import logger as _astr_logger
-except Exception:
-    _astr_logger = None
+from astrbot.api import logger
 
 from ..core.config import ConfigLike
 from ..core.protocol import (
@@ -18,8 +14,6 @@ from ..core.protocol import (
 from ..core.protocol import (
     Protocol as ProtocolClass,
 )
-
-logger = _astr_logger or logging.getLogger(__name__)
 
 
 class MessageHandler:

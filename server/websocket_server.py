@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
-
-try:
-    from astrbot.api import logger as _astr_logger
-except Exception:
-    _astr_logger = None
+from astrbot.api import logger
 
 from ..core.config import ConfigLike
 from ..core.protocol import BasePacket
 from ..core.protocol import Protocol as ProtocolClass
 from .message_handler import MessageHandler
-
-logger = _astr_logger or logging.getLogger(__name__)
 
 
 class WebSocketServer:

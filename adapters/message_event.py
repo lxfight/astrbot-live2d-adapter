@@ -4,13 +4,13 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 try:
-    from astrbot import logger
+    from astrbot.api import logger
     from astrbot.api.event import AstrMessageEvent, MessageChain
     from astrbot.api.message_components import BaseMessageComponent, Plain
-except Exception as e:  # pragma: no cover
+except ImportError as e:
     raise ImportError(
         f"Failed to import AstrBot runtime modules; this adapter must run inside AstrBot: {e}"
-    )
+    ) from e
 
 from ..converters.output_converter import OutputMessageConverter
 from ..core.protocol import BasePacket
