@@ -52,6 +52,17 @@ class InputMessageConverter:
         self.temp_max_files = int(temp_max_files or 0) or None
         self.resource_manager = resource_manager
 
+    def get_temp_files_info(self) -> dict:
+        """获取临时文件信息
+
+        Returns:
+            包含临时文件数量和总字节数的字典
+        """
+        return {
+            'count': len(self._temp_files),
+            'total_bytes': sum(self._temp_files.values())
+        }
+
     def convert(self, content: list[dict[str, Any]]) -> tuple[list, str]:
         """
         转换输入消息

@@ -114,9 +114,9 @@ class Live2DAdapter(Star):
             resource_info = ""
             if adapter.resource_manager:
                 rm = adapter.resource_manager
-                resource_files = len(rm._resources)
+                resource_files = len(rm.resources)
                 max_files = rm.max_total_files
-                total_bytes = sum(r.size for r in rm._resources.values())
+                total_bytes = sum(r.size for r in rm.resources.values())
                 max_bytes = rm.max_total_bytes
                 usage_percent = (total_bytes / max_bytes * 100) if max_bytes > 0 else 0
 
@@ -128,11 +128,11 @@ class Live2DAdapter(Star):
             # 临时文件信息
             temp_info = ""
             if adapter.input_converter:
-                ic = adapter.input_converter
-                temp_files = len(ic._temp_files)
-                max_temp_files = ic.temp_max_files
-                temp_bytes = sum(ic._temp_files.values())
-                max_temp_bytes = ic.temp_max_total_bytes
+                temp_info_data = adapter.input_converter.get_temp_files_info()
+                temp_files = temp_info_data['count']
+                temp_bytes = temp_info_data['total_bytes']
+                max_temp_files = adapter.input_converter.temp_max_files
+                max_temp_bytes = adapter.input_converter.temp_max_total_bytes
                 temp_usage = (temp_bytes / max_temp_bytes * 100) if max_temp_bytes > 0 else 0
 
                 temp_info = f"""
@@ -256,7 +256,7 @@ class Live2DAdapter(Star):
                 return MessageChain().message("[Live2D Adapter] 资源管理器未启用")
 
             rm = adapter.resource_manager
-            resources = rm._resources
+            resources = rm.resources
 
             if not resources:
                 return MessageChain().message("[Live2D Adapter] 当前没有存储的资源")
@@ -295,17 +295,17 @@ class Live2DAdapter(Star):
 
             # 清理资源
             if adapter.resource_manager:
-                before = len(adapter.resource_manager._resources)
+                before = len(adapter.resource_manager.resources)
                 adapter.resource_manager.cleanup_expired()
-                after = len(adapter.resource_manager._resources)
+                after = len(adapter.resource_manager.resources)
                 cleaned_resources = before - after
 
             # 清理临时文件
             if adapter.input_converter:
-                before = len(adapter.input_converter._temp_files)
-                adapter.input_converter._cleanup_temp_files()
-                after = len(adapter.input_converter._temp_files)
-                cleaned_temp = before - after
+                before_info = adapter.input_converter.get_temp_files_info()
+                adapter.input_converter.cleanup_temp_files()
+                after_info = adapter.input_converter.get_temp_files_info()
+                cleaned_temp = before_info['count'] - after_info['count']
 
             cleanup_msg = f"""[Live2D Adapter] 清理完成
 
