@@ -2,26 +2,6 @@ name: "astrbot_plugin_live2d_adapter"
 author: "lxfight"
 desc: "Live2D 桌面客户端平台适配器，支持 L2D-Bridge Protocol v1.0"
 version: "1.0.0"
-repo: "https://github.com/lxfight/astrbot-live2d-adapter"
+repo: "https://github.com/lxfight/astrbot_plugin_live2d_adapter"
 display_name: "Live2D 适配器"
 
-# 依赖信息
-dependencies:
-  python: ">=3.10"
-  astrbot: ">=3.0.0"
-
-# 功能特性
-features:
-  - "WebSocket 实时通信"
-  - "流式消息支持"
-  - "资源管理系统"
-  - "多种消息类型转换"
-  - "Live2D 动作和表情控制"
-  - "TTS 语音合成"
-
-# 标签
-tags:
-  - "platform"
-  - "adapter"
-  - "live2d"
-  - "websocket"
