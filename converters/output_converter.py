@@ -63,7 +63,6 @@ class OutputMessageConverter:
     def __init__(
         self,
         enable_tts: bool = True,
-        tts_mode: str = "remote",
         resource_manager: Any | None = None,
         resource_config: dict[str, Any] | None = None,
         client_model_info: dict[str, Any] | None = None,
@@ -72,13 +71,11 @@ class OutputMessageConverter:
 
         Args:
             enable_tts: 是否启用 TTS
-            tts_mode: TTS 模式 (remote/local)
             resource_manager: 资源管理器（处理本地文件转资源）
             resource_config: 资源配置（inline 限制等）
             client_model_info: 客户端模型信息（动作组和表情列表）
         """
         self.enable_tts = enable_tts
-        self.tts_mode = tts_mode
         self.resource_manager = resource_manager
         self.resource_config = resource_config or {}
         self.client_model_info = client_model_info or {}
@@ -121,12 +118,6 @@ class OutputMessageConverter:
                     tts_element = self._build_tts_element(text=text, url=tts_url)
                     if tts_element:
                         sequence.append(tts_element)
-                elif self.enable_tts and self.tts_mode == "local":
-                    sequence.append(
-                        create_tts_element(
-                            text=text, tts_mode="local", voice="zh-CN-XiaoxiaoNeural"
-                        )
-                    )
 
             elif Image and isinstance(component, Image):
                 # 添加图片展示
@@ -396,7 +387,6 @@ class OutputMessageConverter:
             url=resource_ref.get("url"),
             rid=resource_ref.get("rid"),
             inline=resource_ref.get("inline"),
-            tts_mode="remote",
         )
 
     def _build_video_element(self, video: Any) -> dict[str, Any] | None:
@@ -458,7 +448,6 @@ class OutputMessageConverter:
             url=resource_ref.get("url"),
             rid=resource_ref.get("rid"),
             inline=resource_ref.get("inline"),
-            tts_mode="remote",
         )
 
     def _format_component_text(self, component: Any) -> str | None:

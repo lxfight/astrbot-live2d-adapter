@@ -71,9 +71,6 @@ class ConfigLike(Protocol):
     def enable_tts(self) -> bool: ...
 
     @property
-    def tts_mode(self) -> str: ...
-
-    @property
     def enable_streaming(self) -> bool: ...
 
     @property

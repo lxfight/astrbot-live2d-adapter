@@ -51,11 +51,6 @@ class Live2DAdapter(Star):
             "type": "bool",
             "hint": "是否启用语音合成功能，默认 false",
         },
-        "tts_mode": {
-            "description": "TTS 模式",
-            "type": "string",
-            "hint": "TTS 模式：local(本地) 或 remote(远程)，默认 local",
-        },
         "enable_streaming": {
             "description": "启用流式推送",
             "type": "bool",

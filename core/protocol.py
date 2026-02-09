@@ -293,25 +293,23 @@ def create_tts_element(
     url: str | None = None,
     rid: str | None = None,
     inline: str | None = None,
-    tts_mode: str = "remote",
-    voice: str | None = None,
     volume: float = 1.0,
     speed: float = 1.0,
 ) -> dict[str, Any]:
-    """创建TTS语音元素"""
-    element = {"type": "tts", "text": text, "volume": volume, "speed": speed}
+    """创建TTS语音元素（仅支持远程模式）"""
+    element = {
+        "type": "tts",
+        "text": text,
+        "ttsMode": "remote",
+        "volume": volume,
+        "speed": speed,
+    }
     if url:
         element["url"] = url
-        element["ttsMode"] = "remote"
     if rid:
         element["rid"] = rid
-        element["ttsMode"] = "remote"
     if inline:
         element["inline"] = inline
-        element["ttsMode"] = "remote"
-    elif tts_mode == "local" and voice:
-        element["ttsMode"] = "local"
-        element["voice"] = voice
     return element
 
 

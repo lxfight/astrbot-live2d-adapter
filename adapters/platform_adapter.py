@@ -50,7 +50,6 @@ from .message_event import Live2DMessageEvent
         "kick_old": True,  # 断开旧连接 | Kick old connections
         # 语音合成 | TTS
         "enable_tts": False,  # 启用TTS | Enable TTS
-        "tts_mode": "local",  # TTS模式(local/remote) | TTS mode
         # 流式消息 | Streaming
         "enable_streaming": True,  # 启用流式推送 | Enable streaming
         # 资源服务器 | Resource Server
@@ -136,7 +135,6 @@ class Live2DPlatformAdapter(Platform):
         )
         self.output_converter = OutputMessageConverter(
             enable_tts=self.config_obj.enable_tts,
-            tts_mode=self.config_obj.tts_mode,
             resource_manager=self.resource_manager,
             resource_config={
                 "max_inline_bytes": self.config_obj.resource_max_inline_bytes,
@@ -196,10 +194,6 @@ class Live2DPlatformAdapter(Platform):
             @property
             def enable_tts(self) -> bool:
                 return self._data.get("enable_tts", False)
-
-            @property
-            def tts_mode(self) -> str:
-                return self._data.get("tts_mode", "local")
 
             @property
             def resource_enabled(self) -> bool:
@@ -465,7 +459,6 @@ class Live2DPlatformAdapter(Platform):
                 client_id=client_id,
                 config={
                     "enable_tts": self.config.get("enable_tts", False),
-                    "tts_mode": self.config.get("tts_mode", "local"),
                     "enable_streaming": self.config.get("enable_streaming", True),
                 },
                 resource_manager=self.resource_manager,

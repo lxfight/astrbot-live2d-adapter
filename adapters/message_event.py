@@ -52,7 +52,6 @@ class Live2DMessageEvent(AstrMessageEvent):
         # 初始化消息转换器
         self.output_converter = OutputMessageConverter(
             enable_tts=config.get("enable_tts", True),
-            tts_mode=config.get("tts_mode", "remote"),
             resource_manager=self.resource_manager,
         )
 
