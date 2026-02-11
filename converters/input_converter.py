@@ -231,6 +231,14 @@ class InputMessageConverter:
 
         return {"removed": removed, "removed_bytes": removed_bytes}
 
+    def convert_image(self, item: dict[str, Any]) -> Any | None:
+        """将图片描述字典转换为 AstrBot Image 组件
+
+        Args:
+            item: 包含 url/data/inline/rid 等字段的字典
+        """
+        return self._convert_image(item)
+
     def _convert_image(self, item: dict[str, Any]) -> Any | None:
         """转换图片消息"""
         if not Image:

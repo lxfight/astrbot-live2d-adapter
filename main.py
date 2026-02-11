@@ -640,9 +640,9 @@ WebSocket:
         if not image_data:
             return "截图失败：未收到图像数据"
         if image_data.startswith(("http://", "https://")):
-            image_comp = adapter.input_converter._convert_image({"url": image_data})
+            image_comp = adapter.input_converter.convert_image({"url": image_data})
         else:
-            image_comp = adapter.input_converter._convert_image({"data": image_data})
+            image_comp = adapter.input_converter.convert_image({"data": image_data})
         if image_comp:
             event.message_obj.message.append(image_comp)
         window_info = result.get("window", {})
