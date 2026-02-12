@@ -14,10 +14,14 @@ class DesktopRequestManager:
     def __init__(self):
         self._pending: dict[str, asyncio.Future] = {}
 
-    def resolve(self, packet_id: str, payload: dict | None) -> bool:
+    def resolve(self, packet_id: str, payload: dict | None, error=None) -> bool:
         future = self._pending.pop(packet_id, None)
         if future and not future.done():
-            future.set_result(payload or {})
+            if error:
+                msg = getattr(error, "message", str(error))
+                future.set_exception(RuntimeError(f"桌面端返回错误: {msg}"))
+            else:
+                future.set_result(payload or {})
             return True
         return False
 

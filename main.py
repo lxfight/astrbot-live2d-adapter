@@ -1,6 +1,5 @@
 """AstrBot Live2D Adapter - AstrBot 插件入口"""
 
-import asyncio
 import time
 
 from astrbot.api import logger
@@ -9,7 +8,6 @@ from astrbot.api.star import Context, Star
 from astrbot.core.config.default import CONFIG_METADATA_2
 
 from .adapters.platform_adapter import Live2DPlatformAdapter
-from .core.protocol import Protocol
 
 
 class Live2DAdapter(Star):
@@ -552,102 +550,6 @@ WebSocket:
             return False
         self._registered = False
         return True
-
-    # ──────── 桌面感知 LLM 工具 ────────
-
-    @filter.llm_tool(name="get_desktop_windows")
-    async def tool_get_desktop_windows(self, event: AstrMessageEvent) -> str:
-        """获取用户桌面上所有打开的窗口列表，包含窗口标题、进程名、是否活跃等信息。
-        当需要了解用户正在使用什么应用或做什么事情时调用此工具。
-
-        """
-        adapter = self._get_adapter()
-        if not adapter or not adapter.current_client_id:
-            return "错误：Live2D 客户端未连接"
-        packet = Protocol.create_packet(Protocol.OP_DESKTOP_WINDOW_LIST)
-        try:
-            result = await adapter.desktop_request_mgr.request(
-                adapter.ws_server, adapter.current_client_id, packet
-            )
-        except asyncio.TimeoutError:
-            return "错误：获取窗口列表超时，桌面端未响应"
-        windows = result.get("windows", [])
-        if not windows:
-            return "未检测到打开的窗口"
-        lines = []
-        for w in windows:
-            active = " [活跃]" if w.get("isActive") else ""
-            lines.append(
-                f"- {w.get('title', '未知')} ({w.get('processName', '未知')}){active} [ID:{w.get('id', '')}]"
-            )
-        return "当前桌面窗口列表：\n" + "\n".join(lines)
-
-    @filter.llm_tool(name="get_active_window")
-    async def tool_get_active_window(self, event: AstrMessageEvent) -> str:
-        """获取用户当前正在使用的活跃窗口信息（标题、进程名、窗口ID）。
-
-        """
-        adapter = self._get_adapter()
-        if not adapter or not adapter.current_client_id:
-            return "错误：Live2D 客户端未连接"
-        packet = Protocol.create_packet(Protocol.OP_DESKTOP_WINDOW_ACTIVE)
-        try:
-            result = await adapter.desktop_request_mgr.request(
-                adapter.ws_server, adapter.current_client_id, packet
-            )
-        except asyncio.TimeoutError:
-            return "错误：获取活跃窗口超时，桌面端未响应"
-        window = result.get("window")
-        if not window:
-            return "未检测到活跃窗口"
-        return (
-            f"当前活跃窗口：{window.get('title', '未知')}\n"
-            f"进程：{window.get('processName', '未知')}\n"
-            f"窗口ID：{window.get('id', '')}"
-        )
-
-    @filter.llm_tool(name="capture_screenshot")
-    async def tool_capture_screenshot(
-        self,
-        event: AstrMessageEvent,
-        target: str = "active",
-        window_id: str = "",
-    ) -> str:
-        """截取用户桌面或特定窗口的屏幕截图。截图将作为图片附加到上下文供你分析。
-        当需要查看用户屏幕内容、帮助用户解决问题、或对用户正在看的内容进行评论时调用。
-
-        Args:
-            target(string): 截图目标。"desktop"（全屏）、"active"（当前活跃窗口）、"window"（指定窗口）
-            window_id(string): 当 target 为 "window" 时必填，窗口 ID（通过 get_desktop_windows 获取）
-
-        """
-        adapter = self._get_adapter()
-        if not adapter or not adapter.current_client_id:
-            return "错误：Live2D 客户端未连接"
-        payload = {"target": target, "format": "jpeg", "quality": 80, "maxWidth": 1920}
-        if target == "window" and window_id:
-            payload["windowId"] = window_id
-        packet = Protocol.create_packet(
-            Protocol.OP_DESKTOP_CAPTURE_SCREENSHOT, payload
-        )
-        try:
-            result = await adapter.desktop_request_mgr.request(
-                adapter.ws_server, adapter.current_client_id, packet, timeout=30.0
-            )
-        except asyncio.TimeoutError:
-            return "错误：截图超时，桌面端未响应"
-        image_data = result.get("image", "")
-        if not image_data:
-            return "截图失败：未收到图像数据"
-        if image_data.startswith(("http://", "https://")):
-            image_comp = adapter.input_converter.convert_image({"url": image_data})
-        else:
-            image_comp = adapter.input_converter.convert_image({"data": image_data})
-        if image_comp:
-            event.message_obj.message.append(image_comp)
-        window_info = result.get("window", {})
-        title = window_info.get("title", "未知")
-        return f"已截取屏幕截图（来源：{title}），图片已附加到上下文中，请分析图片内容。"
 
     async def initialize(self):
         self._register_config()

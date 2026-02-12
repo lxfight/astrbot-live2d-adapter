@@ -1,6 +1,7 @@
 """Live2D 平台适配器 - AstrBot 平台适配器实现"""
 
 import asyncio
+import json
 from asyncio import Queue
 from pathlib import Path
 
@@ -150,6 +151,7 @@ class Live2DPlatformAdapter(Platform):
 
         # 桌面感知请求管理器
         self.desktop_request_mgr = DesktopRequestManager()
+        self._registered_tool_names: list[str] = []
 
         logger.info(f"[Live2D] 平台适配器已初始化，ID: {self.config.get('id')}")
 
@@ -576,6 +578,8 @@ class Live2DPlatformAdapter(Platform):
                     if mapped == client_id:
                         self._session_to_client_id.pop(session_id, None)
 
+                self._unregister_desktop_tools()
+
             self.ws_server.on_client_connected = on_client_connected
             self.ws_server.on_client_disconnected = on_client_disconnected
 
@@ -645,8 +649,100 @@ class Live2DPlatformAdapter(Platform):
 
         # 桌面感知响应路由
         ws_server.handler.on_desktop_response = (
-            lambda pid, payload: self.desktop_request_mgr.resolve(pid, payload)
+            lambda pid, payload, error=None: self.desktop_request_mgr.resolve(pid, payload, error)
         )
+
+        ws_server.handler.on_tools_declared = (
+            lambda client_id, tools: self._register_desktop_tools(tools)
+        )
+
+    def _unregister_desktop_tools(self):
+        """注销所有已注册的桌面工具"""
+        for name in self._registered_tool_names:
+            try:
+                StarTools.unregister_llm_tool(name)
+                logger.info(f"[Live2D] 已注销桌面工具: {name}")
+            except Exception as e:
+                logger.debug(f"[Live2D] 注销工具 {name} 失败: {e}")
+        self._registered_tool_names.clear()
+
+    def _register_desktop_tools(self, tools: list[dict]):
+        """根据桌面端声明的工具列表动态注册到 AstrBot"""
+        self._unregister_desktop_tools()
+        for tool_decl in tools:
+            tool_name = tool_decl.get("name")
+            tool_desc = tool_decl.get("description", "")
+            tool_params = tool_decl.get("parameters", [])
+            if not tool_name:
+                continue
+            func_args = [
+                {
+                    "type": p.get("type", "string"),
+                    "name": p.get("name"),
+                    "description": p.get("description", ""),
+                }
+                for p in tool_params
+            ]
+            handler = self._make_tool_handler(tool_name)
+            try:
+                StarTools.register_llm_tool(tool_name, func_args, tool_desc, handler)
+                self._registered_tool_names.append(tool_name)
+                logger.info(f"[Live2D] 已注册桌面工具: {tool_name}")
+            except Exception as e:
+                logger.error(f"[Live2D] 注册工具 {tool_name} 失败: {e}")
+
+    def _make_tool_handler(self, tool_name: str):
+        """创建桌面工具的动态处理函数"""
+        adapter = self
+
+        async def handler(event=None, context=None, **kwargs):
+            if not adapter.current_client_id:
+                return "错误：Live2D 客户端未连接"
+            packet = ProtocolClass.create_packet(
+                ProtocolClass.OP_DESKTOP_TOOL_CALL,
+                payload={"tool": tool_name, "args": kwargs},
+            )
+            try:
+                result = await adapter.desktop_request_mgr.request(
+                    adapter.ws_server, adapter.current_client_id, packet, timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                return f"错误：工具 {tool_name} 调用超时，桌面端未响应"
+            except RuntimeError as e:
+                return f"错误：{e}"
+            if result.get("error"):
+                return f"错误：{result['error']}"
+            tool_result = result.get("result", {})
+            # 截图工具：图片附加到消息上下文
+            if tool_name == "capture_screenshot" and event:
+                return adapter._handle_screenshot_result(event, tool_result)
+            # 通用结果格式化
+            if isinstance(tool_result, dict):
+                window = tool_result.get("window")
+                if window is not None:
+                    if window:
+                        return (
+                            f"当前活跃窗口：{window.get('title', '未知')}\n"
+                            f"进程：{window.get('processName', '未知')}"
+                        )
+                    return "未检测到活跃窗口"
+            return json.dumps(tool_result, ensure_ascii=False) if tool_result else "操作完成"
+
+        return handler
+
+    def _handle_screenshot_result(self, event, tool_result: dict) -> str:
+        """处理截图结果，将图片附加到消息上下文"""
+        image_data = tool_result.get("image", "") if isinstance(tool_result, dict) else ""
+        if image_data:
+            if image_data.startswith(("http://", "https://")):
+                image_comp = self.input_converter.convert_image({"url": image_data})
+            else:
+                image_comp = self.input_converter.convert_image({"data": image_data})
+            if image_comp:
+                event.message_obj.message.append(image_comp)
+        window_info = tool_result.get("window", {}) if isinstance(tool_result, dict) else {}
+        title = window_info.get("title", "未知")
+        return f"已截取屏幕截图（来源：{title}），图片已附加到上下文中，请分析图片内容。"
 
     def _run_cleanup(self) -> None:
         """Best-effort cleanup for disk resources and temp files."""
@@ -708,6 +804,8 @@ class Live2DPlatformAdapter(Platform):
 
             if self.resource_server:
                 await self.resource_server.stop()
+
+            self._unregister_desktop_tools()
 
             logger.info("[Live2D] 平台适配器已停止")
 

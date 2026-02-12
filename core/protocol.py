@@ -119,6 +119,9 @@ class Protocol:
     OP_DESKTOP_WINDOW_LIST = "desktop.window.list"
     OP_DESKTOP_WINDOW_ACTIVE = "desktop.window.active"
 
+    # 桌面工具调用
+    OP_DESKTOP_TOOL_CALL = "desktop.tool.call"
+
     # 桌面控制指令
     OP_DESKTOP_WINDOW_SHOW = "desktop.window.show"
     OP_DESKTOP_WINDOW_HIDE = "desktop.window.hide"

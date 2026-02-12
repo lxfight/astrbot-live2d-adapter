@@ -26,6 +26,8 @@ class MessageHandler:
         self.on_message_received: Callable | None = None
         # 桌面感知响应回调（由平台适配器注入）
         self.on_desktop_response: Callable | None = None
+        # 桌面工具声明回调（握手时触发）
+        self.on_tools_declared: Callable | None = None
         self.client_states: dict[str, dict] = {}
 
     async def handle_packet(
@@ -88,9 +90,19 @@ class MessageHandler:
             ProtocolClass.OP_DESKTOP_WINDOW_LIST,
             ProtocolClass.OP_DESKTOP_WINDOW_ACTIVE,
             ProtocolClass.OP_DESKTOP_CAPTURE_SCREENSHOT,
+            ProtocolClass.OP_DESKTOP_TOOL_CALL,
         ):
             if self.on_desktop_response:
                 self.on_desktop_response(packet.id, packet.payload)
+            return None
+
+        elif packet.op == ProtocolClass.OP_ERROR:
+            # 错误响应可能是桌面请求的回复，尝试路由
+            if self.on_desktop_response:
+                handled = self.on_desktop_response(packet.id, packet.payload, packet.error)
+                if handled:
+                    return None
+            logger.warning(f"收到错误响应: {packet.error}")
             return None
 
         else:
@@ -136,6 +148,11 @@ class MessageHandler:
         capabilities = payload.get("capabilities") or []
         if capabilities:
             logger.info(f"客户端声明能力: {capabilities}")
+
+        # 提取客户端声明的工具
+        tools = payload.get("tools") or []
+        if tools and self.on_tools_declared:
+            self.on_tools_declared(client_id, tools)
 
         server_capabilities = [
             "input.message",
