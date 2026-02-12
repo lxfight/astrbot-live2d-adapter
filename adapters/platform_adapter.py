@@ -1,9 +1,13 @@
 """Live2D 平台适配器 - AstrBot 平台适配器实现"""
 
 import asyncio
+import base64
 import json
+import mimetypes
+import re
 from asyncio import Queue
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 try:
     from astrbot.api import logger
@@ -23,6 +27,17 @@ except ImportError as e:
     raise ImportError(
         f"无法导入 AstrBot 模块，请确保此适配器作为 AstrBot 插件运行: {e}"
     )
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+try:
+    from mcp.types import CallToolResult, ImageContent
+except ImportError:
+    CallToolResult = None
+    ImageContent = None
 
 from ..converters.input_converter import InputMessageConverter
 from ..converters.output_converter import OutputMessageConverter
@@ -714,8 +729,8 @@ class Live2DPlatformAdapter(Platform):
                 return f"错误：{result['error']}"
             tool_result = result.get("result", {})
             # 截图工具：图片附加到消息上下文
-            if tool_name == "capture_screenshot" and event:
-                return adapter._handle_screenshot_result(event, tool_result)
+            if tool_name == "capture_screenshot":
+                return await adapter._handle_screenshot_result(event, tool_result)
             # 通用结果格式化
             if isinstance(tool_result, dict):
                 window = tool_result.get("window")
@@ -730,19 +745,106 @@ class Live2DPlatformAdapter(Platform):
 
         return handler
 
-    def _handle_screenshot_result(self, event, tool_result: dict) -> str:
-        """处理截图结果，将图片附加到消息上下文"""
+
+    async def _extract_tool_image_payload(self, image_data: str) -> tuple[str | None, str | None]:
+        """Convert screenshot payload into (mime_type, base64_data)."""
+        if not image_data:
+            return None, None
+
+        if image_data.startswith("data:image/"):
+            match = re.match(
+                r"^data:(image/[\w.+-]+);base64,(.+)$",
+                image_data,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if not match:
+                return None, None
+
+            mime_type = match.group(1).lower()
+            base64_data = match.group(2).strip()
+            try:
+                base64.b64decode(base64_data, validate=True)
+            except Exception:
+                logger.warning("[Live2D] Invalid screenshot data URI; cannot return tool image")
+                return None, None
+            return mime_type, base64_data
+
+        if image_data.startswith(("http://", "https://")) and aiohttp:
+            try:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(image_data) as resp:
+                        if resp.status < 200 or resp.status >= 300:
+                            logger.warning(
+                                f"[Live2D] Screenshot URL fetch failed: status={resp.status} url={image_data}"
+                            )
+                            return None, None
+                        body = await resp.read()
+                        if not body:
+                            return None, None
+                        content_type = (
+                            (resp.headers.get("Content-Type") or "")
+                            .split(";")[0]
+                            .strip()
+                            .lower()
+                        )
+                        if not content_type.startswith("image/"):
+                            guessed, _ = mimetypes.guess_type(urlparse(image_data).path)
+                            content_type = (
+                                guessed
+                                if guessed and guessed.startswith("image/")
+                                else "image/jpeg"
+                            )
+                        return content_type, base64.b64encode(body).decode("ascii")
+            except Exception as e:
+                logger.warning(f"[Live2D] Screenshot URL fetch error: {e}")
+                return None, None
+
+        if image_data.startswith("file:///"):
+            file_path = unquote(urlparse(image_data).path)
+            if file_path.startswith("/") and len(file_path) >= 3 and file_path[2] == ":":
+                file_path = file_path[1:]
+            p = Path(file_path)
+            if p.exists() and p.is_file():
+                data = p.read_bytes()
+                mime_type, _ = mimetypes.guess_type(str(p))
+                if not mime_type or not mime_type.startswith("image/"):
+                    mime_type = "image/jpeg"
+                return mime_type, base64.b64encode(data).decode("ascii")
+
+        return None, None
+
+    async def _handle_screenshot_result(self, event, tool_result: dict):
+        """Prefer returning image blocks so tool-call models can really see screenshots."""
         image_data = tool_result.get("image", "") if isinstance(tool_result, dict) else ""
-        if image_data:
+        window_info = tool_result.get("window", {}) if isinstance(tool_result, dict) else {}
+        title = window_info.get("title", "unknown")
+
+        mime_type, base64_data = await self._extract_tool_image_payload(image_data)
+        if base64_data and CallToolResult and ImageContent:
+            return CallToolResult(
+                content=[
+                    ImageContent(
+                        type="image",
+                        data=base64_data,
+                        mimeType=mime_type or "image/jpeg",
+                    )
+                ]
+            )
+
+        if image_data and event:
             if image_data.startswith(("http://", "https://")):
                 image_comp = self.input_converter.convert_image({"url": image_data})
             else:
                 image_comp = self.input_converter.convert_image({"data": image_data})
             if image_comp:
                 event.message_obj.message.append(image_comp)
-        window_info = tool_result.get("window", {}) if isinstance(tool_result, dict) else {}
-        title = window_info.get("title", "未知")
-        return f"已截取屏幕截图（来源：{title}），图片已附加到上下文中，请分析图片内容。"
+                return (
+                    f"Screenshot captured (source: {title}); image attached to context. "
+                    "Please analyze the image content."
+                )
+
+        return f"Screenshot captured (source: {title}), but image data is unavailable. Please retry."
 
     def _run_cleanup(self) -> None:
         """Best-effort cleanup for disk resources and temp files."""
