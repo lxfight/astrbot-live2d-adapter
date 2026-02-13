@@ -1,201 +1,118 @@
 # AstrBot Live2D Adapter
 
-**Live2D 桌面应用平台适配器**，支持 Live2D-Bridge Protocol v1.0
+AstrBot 的 Live2D 平台适配器插件，负责桌面端与 AstrBot 间的协议桥接。  
+支持文本/图片/语音输入、表演序列回传、资源服务与桌面能力调用。
 
-将 Live2D 桌面应用接入 AstrBot 机器人框架，实现：
-- 用户通过 Live2D 桌面端与 AstrBot 进行私聊交互
-- 支持文字、图片、语音等多模态消息双向传输
-- Live2D 角色展示文字气泡、播放 TTS 语音、执行动作和表情
+## 快速入口
 
-## 特性
-
-✅ **完整的平台适配器**
-- 作为 AstrBot 平台插件运行
-- 支持 WebSocket 通讯（L2D-Bridge Protocol v1.0）
-- 单连接约束、握手鉴权、心跳保活
-
-✅ **双向消息转换**
-- 桌面端输入 → AstrBot 消息链
-- AstrBot 回复 → Live2D 表演序列（文字、动作、表情、TTS）
-
-✅ **资源管理**
-- 支持图片、音频、视频等大文件传输
-- 自动处理 URL 引用、资源 ID 引用、Base64 内联
-
-✅ **交互事件支持**
-- 支持 input.message（文本消息）
-- 支持 input.touch（触摸事件）
-- 支持 input.shortcut（快捷键事件）
-
-✅ **动作执行接口**
-- 保留下发动作和表情的能力
-- 其他插件可通过自定义组件控制 Live2D 动作
-- 支持 motionType 提示（由其他模块实现）
-
-✅ **流式输出支持**（可选）
-- 逐块发送 LLM 生成内容
-- 提升交互体验
-
-## 技术栈
-
-- Python 3.9+
-- AstrBot 框架
-- websockets（WebSocket 服务器）
-- asyncio（异步 IO）
+- 一键安装与云服务器教程：[`docs/TUTORIAL.zh-CN.md`](./docs/TUTORIAL.zh-CN.md)
+- 协议文档：[`docs/API.md`](./docs/API.md)
+- 管理命令：[`docs/COMMANDS.md`](./docs/COMMANDS.md)
 
 ## 安装
 
-### 方式 1：作为 AstrBot 插件（推荐）
+在 **AstrBot 插件市场** 搜索并安装 `astrbot_plugin_live2d_adapter`，启用后在平台适配器处添加一个live2d 适配器，并配置`auth_token`
 
-1. 将本项目放入 AstrBot 插件目录：
+## 能力概览
 
-```bash
-cd <AstrBot安装目录>/data/plugins
-# 将本仓库复制/克隆到该目录下
-```
+- `input.message` / `input.touch` / `input.shortcut` 双向事件桥接
+- 消息链转换为 Live2D 表演序列（文字、动作、表情、TTS）
+- WebSocket 握手鉴权、心跳保活、单连接约束
+- 资源管理（inline / URL / resource id）与自动清理
+- 桌面工具声明与远程调用（窗口/截图等）
 
-2. 在 AstrBot Dashboard 中启用 Live2D 平台适配器
+## 架构流程
 
-3. 配置平台参数（见下文）
+1. 桌面端发起 `sys.handshake`（含 token）
+2. 适配器完成鉴权并建立会话
+3. 桌面输入事件转换为 AstrBot 消息事件
+4. AstrBot 回复转换为 `perform.show` 回推给桌面端
+5. 大资源通过资源服务端口分流传输
 
-## 配置
-
-在 AstrBot Dashboard 中配置 Live2D 平台适配器：
+## 推荐配置（安全默认）
 
 ```yaml
 type: "live2d"
 enable: true
 id: "live2d_default"
 
-# WebSocket 配置
-ws_host: "127.0.0.1"       # WebSocket 监听地址（建议仅本机）
-ws_port: 9090              # WebSocket 端口
-ws_path: "/astrbot/live2d" # WebSocket 路径
-auth_token: ""             # 鉴权密钥（必填；留空将自动生成随机密钥）
-max_connections: 1         # 最大连接数（建议保持为 1）
-kick_old: true             # 新连接时踢掉旧连接
+ws_host: "127.0.0.1"
+ws_port: 9090
+ws_path: "/astrbot/live2d"
+auth_token: ""              # 强制鉴权；留空自动生成随机密钥
+max_connections: 1
+kick_old: true
 
-# 功能配置
-enable_tts: false          # 是否启用 TTS（由 AstrBot TTS 插件提供）
-tts_mode: "local"          # TTS 模式：local（桌面端处理）/ remote（服务端处理）
-enable_streaming: true     # 是否启用流式输出
-
-# 资源服务器（图片/语音等大资源传输）
 resource_enabled: true
-resource_host: "127.0.0.1" # 建议仅本机
+resource_host: "127.0.0.1"
 resource_port: 9091
 resource_path: "/resources"
-resource_dir: "./data/live2d_resources"
-resource_base_url: ""      # 为空时自动使用 http://{host}:{port}
-resource_token: ""         # 为空时复用 auth_token
-resource_max_inline_bytes: 262144  # 256KB，超过此大小使用 URL 引用
-
-# 临时文件管理
-temp_dir: "./data/live2d_temp"
-temp_ttl_seconds: 21600    # 6小时
-temp_max_total_bytes: 268435456  # 256MB
-temp_max_files: 5000
-
-# 清理任务
-cleanup_interval_seconds: 600  # 10分钟
+resource_dir: "live2d_resources"
+resource_token: ""          # 为空时复用 auth_token
 ```
 
-安全说明：
-- `auth_token` 现在为强制鉴权，桌面端必须填写一致密钥才能连接。
-- 当 `auth_token` 为空时，插件会自动生成高强度随机密钥并保存到插件数据目录的 `live2d_auth_token.txt`。
-- 请将该密钥填入桌面端“设置 -> 连接配置 -> 认证令牌”。
+### 认证密钥说明
 
-## 使用
+- `auth_token` 现为强制。
+- 若配置为空，插件会自动生成随机密钥并保存到：
+  `data/plugin_data/astrbot-live2d-adapter/live2d_auth_token.txt`
+- 请将该值填入桌面端「设置 -> 连接配置 -> 认证令牌」。
 
-### 消息流程
+## 云服务器部署要点
 
-1. **用户输入** → Live2D 桌面端
-2. **WebSocket 传输** → 适配器（`input.message`）
-3. **转换** → AstrBot 消息事件
-4. **处理** → AstrBot 插件系统 / LLM
-5. **回复** → 适配器接收 MessageChain
-6. **转换** → Live2D 表演序列（`perform.show`）
-7. **WebSocket 传输** → 桌面端展示
+若桌面端通过公网连接服务器，请至少完成以下步骤：
 
-### 在其他插件中控制 Live2D 动作
+1. 将 `ws_host`/`resource_host` 调整为可监听地址（如 `0.0.0.0`）
+2. 云安全组放行 TCP `9090`、`9091`
+3. 主机防火墙同步放行同端口
+4. **务必设置来源 IP 白名单**
+5. 使用强随机 token，建议配合 WSS/反向代理
 
-其他 AstrBot 插件可以通过自定义消息组件来控制 Live2D 动作和表情：
+详细命令示例见：[`docs/TUTORIAL.zh-CN.md`](./docs/TUTORIAL.zh-CN.md)
 
-```python
-from astrbot.api.event import MessageChain
-from astrbot.api.message_components import Plain
+## 服务器安全基线（建议）
 
-# 定义自定义组件类
-class Live2DMotion:
-    """Live2D 动作组件"""
-    def __init__(self, group: str, index: int = 0, priority: int = 2,
-                 motion_type: str = None, loop: bool = False):
-        self.type = "live2d_motion"
-        self.group = group
-        self.index = index
-        self.priority = priority
-        self.motion_type = motion_type  # 可选：happy, sad, angry 等
-        self.loop = loop
-        self.fade_in = 300
-        self.fade_out = 300
+- 使用 32 位以上随机认证密钥，并定期轮换
+- 不对公网暴露不必要端口
+- 限制来源 IP，避免全网可连
+- 关注连接失败、异常流量、资源占用日志
+- 生产环境优先使用 TLS（WSS）
 
-class Live2DExpression:
-    """Live2D 表情组件"""
-    def __init__(self, expression_id: str, fade: int = 300, motion_type: str = None):
-        self.type = "live2d_expression"
-        self.expression_id = expression_id
-        self.fade = fade
-        self.motion_type = motion_type  # 可选
+## 常用管理命令
 
-# 使用示例
-async def my_handler(event):
-    chain = MessageChain([
-        Plain("你好！"),
-        Live2DMotion(group="TapBody", index=0, motion_type="happy"),
-        Live2DExpression(expression_id="smile")
-    ])
-    await event.send(chain)
-```
+- `/live2d status`：查看连接、资源与服务状态
+- `/live2d info`：查看当前客户端信息
+- `/live2d list`：查看客户端列表
+- `/live2d resources`：查看资源占用
+- `/live2d cleanup`：手动清理资源（管理员）
+- `/live2d config`：查看当前配置（管理员）
+
+完整说明见：[`docs/COMMANDS.md`](./docs/COMMANDS.md)
+
+## 与其他插件联动
+
+适配器保留动作/表情注入通道，其他插件可通过自定义消息组件输出 `live2d_motion` / `live2d_expression`，驱动桌面端模型表现。
 
 ## 项目结构
 
-```
+```text
 astrbot-live2d-adapter/
-├── main.py                  # AstrBot 插件入口
-├── README.md                # 项目说明
-├── API.md                   # 协议文档
-├── requirements.txt         # Python 依赖
-├── adapters/                # 平台适配器与事件定义
-│   ├── platform_adapter.py  # Live2D 平台适配器
-│   └── message_event.py     # Live2D 消息事件
-├── converters/              # 消息/表演序列转换
-│   ├── input_converter.py   # 输入消息转换
-│   └── output_converter.py  # 输出消息转换
-├── core/                    # 协议与核心类型
-│   ├── protocol.py          # 协议定义
-│   └── config.py            # 配置类型
-└── server/                  # WebSocket 服务端实现
-    ├── websocket_server.py  # WebSocket 服务器
-    ├── message_handler.py   # 消息处理器
-    ├── resource_manager.py  # 资源管理器
-    └── resource_server.py   # 资源HTTP服务器
+├─ main.py                  # AstrBot 插件入口
+├─ adapters/                # 平台适配与消息事件
+├─ converters/              # 输入/输出转换器
+├─ core/                    # 协议与配置类型
+├─ server/                  # WebSocket 与资源服务实现
+└─ docs/
+   ├─ API.md
+   ├─ COMMANDS.md
+   └─ TUTORIAL.zh-CN.md
 ```
-
-## 协议
-
-使用 **L2D-Bridge Protocol v1.0**。
-
-协议文档：[API.md](./API.md)
-
-## 许可证
-
-MIT
 
 ## 相关项目
 
-- [AstrBot](https://github.com/Soulter/AstrBot) - 多平台机器人框架
-- [astrbot-live2d-desktop](https://github.com/lxfight/astrbot-live2d-desktop) - Live2D 桌面端应用
+- [AstrBot](https://github.com/Soulter/AstrBot)
+- [astrbot-live2d-desktop](https://github.com/lxfight/astrbot-live2d-desktop)
 
-## 贡献
+## License
 
-欢迎提交 Issue 和 Pull Request！
+MIT
