@@ -133,12 +133,14 @@ sudo firewall-cmd --list-all
 
 ### 管理命令（在 AstrBot 使用）
 
-- `/live2d.status`：看在线状态、连接数、资源使用。
-- `/live2d.info`：看当前客户端详情（模型、动作组等）。
-- `/live2d.list`：查看连接客户端列表。
-- `/live2d.resources`：看资源占用。
-- `/live2d.cleanup`：手动清理（管理员）。
-- `/live2d.config`：查看当前配置（管理员）。
+- `/live2d status`：看在线状态、连接数、资源使用。
+- `/live2d info`：看当前客户端详情（模型、动作组等）。
+- `/live2d list`：查看连接客户端列表。
+- `/live2d resources`：看资源占用。
+- `/live2d cleanup`：手动清理（管理员）。
+- `/live2d config`：查看当前配置（管理员）。
+
+兼容旧写法：`/live2d.status`、`/live2d.info` 等点号命令仍可使用。
 
 完整说明见：`COMMANDS.md`
 
